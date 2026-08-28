@@ -7,6 +7,10 @@ from collections import defaultdict
 
 outdir = sys.argv[1]
 
+def fmt_cpu_m(m):
+    m=float(m)
+    return (f"{m/1000:.1f}".rstrip("0").rstrip(".")+" cores") if m>=1000 else f"{m:.0f}m"
+
 def svc_of(ns, pod):
     # Real pods: <prefix>-<servicename>-<replicaset>-<suffix>
     #   txn-transactionservice-9456f7669-5h9cp -> transactionservice
@@ -103,7 +107,7 @@ for svc in services:
     if a["cpu_peak"] > 0 and a["cpu_settled"] > 0:
         ratio = a["cpu_peak"] / max(a["cpu_settled"], 1)
         if ratio >= 1.5:
-            findings.append(f"{svc}: CPU rose to {a['cpu_peak']:.0f}m at peak load, settling to ~{a['cpu_settled']:.0f}m — a {ratio:.1f}x swing.")
+            findings.append(f"{svc}: CPU peaked at {fmt_cpu_m(a['cpu_peak'])} and averaged {fmt_cpu_m(a['cpu_settled'])} when settled ({ratio:.1f}x higher at peak than settled).")
     if a["pods_max"] > a["pods_min"]:
         findings.append(f"{svc}: scaled from {a['pods_min']} to {a['pods_max']} pods during the run.")
     if restart_delta.get(svc, 0) > 0:

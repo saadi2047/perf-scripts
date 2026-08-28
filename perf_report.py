@@ -83,6 +83,12 @@ def section_deltas(before, after):
         return {}
     ba,aa=approw(bc),approw(ac)
     facts=[]
+    # detect failed capacity capture (reserved=0 while alloc>0 means describe nodes came back empty)
+    try:
+        if float(ba.get("alloc_cores",0))>0 and float(ba.get("reserved_cores",0))==0:
+            h.append('<div class="banner bad">⚠ Capacity capture incomplete this run — reserved/free CPU unavailable '
+                     '(oc describe nodes returned empty). Re-run the before-snapshot for accurate reservation data.</div>')
+    except: pass
     # reserved cpu delta
     try:
         rb,ra=float(ba.get("reserved_cores",0)),float(aa.get("reserved_cores",0))
@@ -219,6 +225,11 @@ def section_alloc(before):
     cls=read_csv(os.path.join(before,"capacity_by_class.csv")) if before else []
     appc=next((c for c in cls if c["class"]=="app-worker"), {})
     h=['<h2>6 · Resource allocation (request / limit \u00d7 replicas)</h2>']
+    # warn if HPA replicas all defaulted to 1 (HPA capture failed)
+    nonhdr=[r for r in rows if r["service"]!="TOTAL"]
+    if nonhdr and all(r.get("replicas_cur")=="1" and r.get("replicas_max")=="1" for r in nonhdr):
+        h.append('<div class="banner bad">⚠ HPA data was not captured this run — replica counts default to 1, '
+                 'so the ×replicas totals are understated. Re-run the before-snapshot for accurate HPA scaling.</div>')
     if appc:
         h.append('<div class="grid">')
         h.append(f'<div class="kpi"><div class="lbl">App-worker nodes</div><div class="val">{appc.get("nodes","–")}</div></div>')

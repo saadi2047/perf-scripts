@@ -1,108 +1,3 @@
-total 80
--rw-r----- 1 osuser osuser  4829 Aug 28 15:58 alloc_parse.py
--rw-r----- 1 osuser osuser  2537 Aug 28 13:41 app_parse.py
--rw-r----- 1 osuser osuser  6814 Aug 28 13:41 capacity_parse.py
--rw-r----- 1 osuser osuser  1939 Aug 28 13:08 cap_extras.py
--rw-r----- 1 osuser osuser  7227 Aug 28 15:44 infra_parse.py
--rwxr-x--- 1 osuser osuser  5066 Aug 28 13:10 perf-app.sh
--rwxr-x--- 1 osuser osuser  4230 Aug 28 15:43 perf-capacity.sh
--rwxr-x--- 1 osuser osuser  6048 Aug 28 13:11 perf-infra.sh
--rw-r----- 1 osuser osuser 19605 Aug 28 15:45 perf_report.py
--rwxr-x--- 1 osuser osuser  3000 Aug 28 13:12 perf-run.sh
-[osuser@bastion perf-testing]$ vi perf_report.py
-[osuser@bastion perf-testing]$ vi perf-run.sh
-[osuser@bastion perf-testing]$ vi cap_extras.py
-[osuser@bastion perf-testing]$ ./perf-run.sh before
-Traceback (most recent call last):
-  File "./perf-run.sh", line 22, in <module>
-    with open(os.path.join(outdir, "hpa_state.csv"), "w") as f:
-FileNotFoundError: [Errno 2] No such file or directory: 'before/hpa_state.csv'
-[osuser@bastion perf-testing]$ ls -lrth
-total 80K
--rwxr-x--- 1 osuser osuser 5.0K Aug 28 13:10 perf-app.sh
--rwxr-x--- 1 osuser osuser 6.0K Aug 28 13:11 perf-infra.sh
--rw-r----- 1 osuser osuser 2.5K Aug 28 13:41 app_parse.py
--rw-r----- 1 osuser osuser 6.7K Aug 28 13:41 capacity_parse.py
--rwxr-x--- 1 osuser osuser 4.2K Aug 28 15:43 perf-capacity.sh
--rw-r----- 1 osuser osuser 7.1K Aug 28 15:44 infra_parse.py
--rw-r----- 1 osuser osuser 4.8K Aug 28 15:58 alloc_parse.py
--rw-r----- 1 osuser osuser  20K Aug 28 16:25 perf_report.py
--rwxr-x--- 1 osuser osuser 2.0K Aug 28 16:25 perf-run.sh
--rw-r----- 1 osuser osuser 1.9K Aug 28 16:26 cap_extras.py
-[osuser@bastion perf-testing]$ ./perf-run.sh before
-Traceback (most recent call last):
-  File "./perf-run.sh", line 22, in <module>
-    with open(os.path.join(outdir, "hpa_state.csv"), "w") as f:
-FileNotFoundError: [Errno 2] No such file or directory: 'before/hpa_state.csv'
-[osuser@bastion perf-testing]$ head -1 perf-run.sh
-#!/usr/bin/env python3
-[osuser@bastion perf-testing]$ head -1 cap_extras.py
-#!/usr/bin/env python3
-[osuser@bastion perf-testing]$ chmod +x perf-run.sh
-[osuser@bastion perf-testing]$ ./perf-run.sh before
-Traceback (most recent call last):
-  File "./perf-run.sh", line 22, in <module>
-    with open(os.path.join(outdir, "hpa_state.csv"), "w") as f:
-FileNotFoundError: [Errno 2] No such file or directory: 'before/hpa_state.csv'
-[osuser@bastion perf-testing]$ cat > perf-run.sh << 'PERFRUN_EOF'
-> #!/usr/bin/env sh
-> # ============================================================================
-> # perf-run.sh — one entry point for the whole PERF load-test capture
-> # SBI ePay 2.0 PERF · Saadi M Muzzammil
-> # ============================================================================
-> set -u
-> CMD="${1:-help}"; shift 2>/dev/null || true
-> INTERVAL=60; DURATION=3600
-> BASE="$(pwd)"
-> MARKER="$BASE/.perf_current_run"
-> while [ $# -gt 0 ]; do case "$1" in
->   -i) INTERVAL="$2"; shift 2;; -d) DURATION="$2"; shift 2;; *) shift;; esac; done
-> D=$(dirname "$0")
->
-> new_run() {
->   RUN="$BASE/perf-test-$(date +%Y%m%d_%H%M%S)"
->   mkdir -p "$RUN"
->   echo "$RUN" > "$MARKER"
->   echo "$RUN"
-> }
-> current_run() {
->   if [ -f "$MARKER" ]; then cat "$MARKER"; else new_run; fi
-> }
-> newest() { for d in $(ls -dt "$1"/$2 2>/dev/null); do [ -d "$d" ] && { echo "$d"; return; }; done; }
->
-> case "$CMD" in
->   before)
->     RUN=$(new_run)
->     echo "[*] NEW run folder: $RUN"
->     sh "$D/perf-capacity.sh" --phase before -o "$RUN"
->     ;;
->   new)
->     RUN=$(new_run); echo "[*] NEW run folder ready: $RUN"
->     ;;
->   during)
->     RUN=$(current_run); echo "[*] run folder: $RUN"
->     echo "[*] launching infra + app collectors in parallel for $((DURATION/60)) min..."
->     sh "$D/perf-infra.sh" -i "$INTERVAL" -d "$DURATION" -o "$RUN" 2>&1 | sed 's/^/[infra] /' & IP=$!
->     sh "$D/perf-app.sh"   -i "$INTERVAL" -d "$DURATION" -o "$RUN" 2>&1 | sed 's/^/[app]   /' & AP=$!
->     wait "$IP"; wait "$AP"
->     echo "[OK] both collectors finished"
->     ;;
->   after)
->     RUN=$(current_run); echo "[*] run folder: $RUN"
->     sh "$D/perf-capacity.sh" --phase after -o "$RUN"
->     ;;
->   report)
->     RUN=$(current_run); echo "[*] run folder: $RUN"
->     B=$(newest "$RUN" 'perf_capacity_before_*'); A=$(newest "$RUN" 'perf_capacity_after_*')
->     I=$(newest "$RUN" 'perf_infra_*'); AP=$(newest "$RUN" 'perf_app_*')
->     echo "    before=$B"; echo "    after=$A"; echo "    infra=$I"; echo "    app=$AP"
->     OUT="$RUN/PERF_Report_$(date +%Y%m%d_%H%M%S).html"
->     python3 "$D/perf_report.py" ${B:+--before "$B"} ${A:+--after "$A"} ${I:+--infra "$I"} ${AP:+--app "$AP"} -o "$OUT"
->     echo "[OK] report: $OUT"
->     ;;
->   *) grep '^#' "$0" | sed 's/^# \{0,1\}//' ;;
-> esac
-> PERFRUN_EOF
 [osuser@bastion perf-testing]$ ./perf-run.sh before
 [*] NEW run folder: /home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260828_163155
 [*] perf-capacity.sh  phase=before  out=/home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260828_163155/perf_capacity_before_20260828_163155
@@ -135,45 +30,150 @@ FileNotFoundError: [Errno 2] No such file or directory: 'before/hpa_state.csv'
 #!/usr/bin/env sh
 [osuser@bastion perf-testing]$ head -1 cap_extras.py
 #!/usr/bin/env python3
-[osuser@bastion perf-testing]$
+[osuser@bastion perf-testing]$ ./perf-run.sh during -i 30 -d 300
+[*] run folder: /home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260828_163155
+[*] launching infra + app collectors in parallel for 5 min...
+[app]   [*] perf-app.sh  interval=30s  samples=10  (~5 min)
+[app]   [*] namespaces: perf-transaction perf-admin perf-kms perf-merchant perf-simulators perf-notification perf-epay-common perf-frontend
+[app]   [*] out: /home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260828_163155/perf_app_20260828_163348  (filtered logs only; app metrics via Dynatrace)
+[infra] [*] perf-infra.sh  interval=30s  samples=10  (~5 min)
+[infra] [*] namespaces: perf-transaction perf-admin perf-kms perf-merchant perf-simulators perf-notification perf-epay-common perf-frontend
+[infra] [*] out: /home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260828_163155/perf_infra_20260828_163348
+[infra] [2026-08-28T11:03:48Z] sample 1/10 ... done (7s)
+[app]   [2026-08-28T11:03:48Z] sample 1/10 ... done (26s)
+[infra] [2026-08-28T11:04:18Z] sample 2/10 ... done (7s)
+[app]   [2026-08-28T11:04:18Z] sample 2/10 ... done (26s)
+[infra] [2026-08-28T11:04:48Z] sample 3/10 ... done (6s)
+[app]   [2026-08-28T11:04:48Z] sample 3/10 ... done (25s)
+[infra] [2026-08-28T11:05:18Z] sample 4/10 ... done (7s)
+[app]   [2026-08-28T11:05:18Z] sample 4/10 ... done (25s)
+[infra] [2026-08-28T11:05:48Z] sample 5/10 ... done (7s)
+[app]   [2026-08-28T11:05:48Z] sample 5/10 ... done (26s)
+[infra] [2026-08-28T11:06:18Z] sample 6/10 ... done (7s)
+[app]   [2026-08-28T11:06:18Z] sample 6/10 ... done (26s)
+[infra] [2026-08-28T11:06:48Z] sample 7/10 ... done (6s)
+[app]   [2026-08-28T11:06:48Z] sample 7/10 ... done (25s)
+[infra] [2026-08-28T11:07:18Z] sample 8/10 ... done (7s)
+[app]   [2026-08-28T11:07:18Z] sample 8/10 ... done (24s)
+[infra] [2026-08-28T11:07:48Z] sample 9/10 ... done (6s)
+[app]   [2026-08-28T11:07:48Z] sample 9/10 ... done (23s)
+[infra] [2026-08-28T11:08:18Z] sample 10/10 ... done (6s)
+[infra] [*] collection complete, parsing trends...
+[infra]     [infra] node utilization aggregated for 24 nodes
+[infra]     [infra] 12 services, 10 samples
+[infra]     [infra] 4 findings written
+[infra]        - merchant: CPU peaked at 11m and averaged 6m when settled (1.8x higher at peak than settled).
+[infra]        - reportservice: CPU peaked at 40m and averaged 24m when settled (1.7x higher at peak than settled).
+[infra]        - transaction: CPU peaked at 48m and averaged 22m when settled (2.2x higher at peak than settled).
+[infra]        - perf-epay-common: 10 scheduling event(s) from affinity/PVC/taint — NOT cpu-related (excluded from capacity signal).
+[infra] [*] packaging...
+[infra] [✓] DONE  dir=/home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260828_163155/perf_infra_20260828_163348  zip=/home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260828_163155/perf_infra_20260828_163348.zip
+[app]   [2026-08-28T11:08:18Z] sample 10/10 ... done (23s)
+[app]   [*] parsing log signals...
+[app]       [app] 4 services with log signals, 5 findings
+[app]          - kmsservice: 2 HTTP 503 / service-unavailable line(s). [pods: kms-kmsservice-6558d96b54-ftdsh]
+[app]          - merchant: 1 HTTP 503 / service-unavailable line(s). [pods: merchantfe-merchant-frontend-687db6d847-wllzw]
+[app]          - merchant: 24 ERROR-level line(s) — elevated. [pods: merchantfe-merchant-frontend-687db6d847-wllzw]
+[app]          - paymentservice: 39 HTTP 503 / service-unavailable line(s). [pods: payment-paymentservice-8449769dd9-4bdbx, payment-paymentservice-8449769dd9-8vmfn, payment-paymentservice-8449769dd9-grvgd +4 more]
+[app]          - transaction: 120 ERROR-level line(s) — elevated. [pods: transactionfe-transaction-frontend-85d556d657-7jg5c, transactionfe-transaction-frontend-85d556d657-fm75v, transactionfe-transaction-frontend-85d556d657-jv9ct +2 more]
+[app]   [*] packaging...
+[app]   [✓] DONE  dir=/home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260828_163155/perf_app_20260828_163348  zip=/home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260828_163155/perf_app_20260828_163348.zip
+[OK] both collectors finished
+[osuser@bastion perf-testing]$ ./perf-run.sh after
+[*] run folder: /home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260828_163155
+[*] perf-capacity.sh  phase=after  out=/home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260828_163155/perf_capacity_after_20260828_163845
+[*] capturing raw node + pod data...
+[*] raw capture done. (parser + HTML in next build step)
+[*] OUTDIR=/home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260828_163155/perf_capacity_after_20260828_163845
+[*] parsing capacity...
+    [parser] node usage parsed for 24 nodes
+    [parser] 24 nodes classified
+    [parser] app pool: 12 worker nodes (0 carry a gemfire taint -> need matching toleration)
+    [parser] largest app-worker free slot: 6651m (fit 3000m pod: YES)
+    [extras] HPA rows: 39, Pending pods: 2
+    [extras] TXN HPA live: min=2 max=6 current=5  (repo says max=15 — flag if different)
+    [extras] TXN HPA live: min=15 max=30 current=15  (repo says max=15 — flag if different)
+    [extras] TXN HPA live: min=1 max=4 current=1  (repo says max=15 — flag if different)
+    [extras] TXN HPA live: min=1 max=6 current=1  (repo says max=15 — flag if different)
+    [alloc] 10 services; totals cur cpu_req=85650m mem_req=125440Mi | max cpu_req=199100m mem_req=315392Mi
+[*] packaging...
+[✓] DONE
+    dir: /home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260828_163155/perf_capacity_after_20260828_163845
+    zip: /home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260828_163155/perf_capacity_after_20260828_163845.zip
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    Key outputs:
+      node_capacity.csv      — per-node alloc/reserved/free, classified
+      capacity_by_class.csv  — app-worker vs gemfire vs infra (the 112c truth)
+      fit_check.txt          — can a 3000m txn pod be placed?
+      hpa_state.csv          — live min/max/current (repo-drift check)
+      pending_pods.csv       — anything Pending at snapshot
+[osuser@bastion perf-testing]$ ./perf-run.sh report
+[*] run folder: /home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260828_163155
+    before=/home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260828_163155/perf_capacity_before_20260828_163155
+    after=/home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260828_163155/perf_capacity_after_20260828_163845
+    infra=/home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260828_163155/perf_infra_20260828_163348
+    app=/home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260828_163155/perf_app_20260828_163348
+[report] wrote /home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260828_163155/PERF_Report_20260828_163900.html
+[OK] report: /home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260828_163155/PERF_Report_20260828_163900.html
+[osuser@bastion perf-testing]$ cd perf-test-20260828_163155/
+[osuser@bastion perf-test-20260828_163155]$ ls -d perf_capacity_* perf_infra_* perf_app_* PERF_Report_*.html
+perf_app_20260828_163348      perf_capacity_after_20260828_163845      perf_capacity_before_20260828_163155      perf_infra_20260828_163348      PERF_Report_20260828_163900.html
+perf_app_20260828_163348.zip  perf_capacity_after_20260828_163845.zip  perf_capacity_before_20260828_163155.zip  perf_infra_20260828_163348.zip
+[osuser@bastion perf-test-20260828_163155]$ wc -l perf_infra_*/node_usage.csv
+241 perf_infra_20260828_163348/node_usage.csv
+[osuser@bastion perf-test-20260828_163155]$ cat  perf_infra_*/node_trends.csv
+node,cpu_pct_avg,cpu_pct_peak,mem_pct_avg,mem_pct_peak,cpu_m_avg,cpu_m_peak
+gemfirecache1.preprod.epay.sbi,2.0,2.0,19.0,19.0,353,379
+gemfirecache2.preprod.epay.sbi,2.0,2.0,21.0,21.0,389,415
+gemfirecache3.preprod.epay.sbi,3.0,3.0,19.0,19.0,498,525
+gemfirecache4.preprod.epay.sbi,5.2,6.0,21.0,21.0,907,1044
+gemfirecache5.preprod.epay.sbi,2.9,4.0,21.0,21.0,524,622
+infra1.preprod.epay.sbi,16.5,21.0,28.8,37.0,2619,3384
+infra2.preprod.epay.sbi,6.0,9.0,15.0,15.0,1028,1492
+infra3.preprod.epay.sbi,13.2,20.0,24.0,24.0,2128,3214
+kafbroker1.preprod.epay.sbi,9.9,11.0,31.0,31.0,1599,1775
+kafbroker2.preprod.epay.sbi,11.5,12.0,31.0,31.0,1868,1975
+kafbroker3.preprod.epay.sbi,7.2,8.0,32.0,32.0,1193,1293
+master1.preprod.epay.sbi,24.6,29.0,58.0,58.0,3894,4555
+master2.preprod.epay.sbi,20.8,27.0,52.0,52.0,3294,4260
+master3.preprod.epay.sbi,16.2,22.0,39.0,39.0,2620,3512
+worker1.preprod.epay.sbi,2.9,3.0,16.0,16.0,488,530
+worker2.preprod.epay.sbi,7.1,10.0,22.0,22.0,1186,1584
+worker3.preprod.epay.sbi,4.1,5.0,20.1,21.0,735,792
+worker4.preprod.epay.sbi,5.0,6.0,29.0,29.0,812,957
+worker5.preprod.epay.sbi,2.8,3.0,23.0,23.0,501,539
+worker6.preprod.epay.sbi,4.0,4.0,23.0,23.0,670,727
+worker7.preprod.epay.sbi,2.1,3.0,21.0,21.0,437,472
+zookeeper1.preprod.epay.sbi,2.0,2.0,23.0,23.0,884,971
+zookeeper2.preprod.epay.sbi,0.1,1.0,13.0,13.0,308,384
+zookeeper3.preprod.epay.sbi,1.0,1.0,16.0,16.0,407,445
+[osuser@bastion perf-test-20260828_163155]$ cat  perf_infra_*/findings.txt
+merchant: CPU peaked at 11m and averaged 6m when settled (1.8x higher at peak than settled).
+reportservice: CPU peaked at 40m and averaged 24m when settled (1.7x higher at peak than settled).
+transaction: CPU peaked at 48m and averaged 22m when settled (2.2x higher at peak than settled).
+perf-epay-common: 10 scheduling event(s) from affinity/PVC/taint — NOT cpu-related (excluded from capacity signal).
+[osuser@bastion perf-test-20260828_163155]$ cat  perf_capacity_before_*/resource_alloc.csv
+service,namespace,cpu_req_m,cpu_lim_m,mem_req_mi,mem_lim_mi,replicas_cur,replicas_max,cpu_req_cur_m,cpu_lim_cur_m,mem_req_cur_mi,mem_lim_cur_mi,cpu_req_max_m,cpu_lim_max_m,mem_req_max_mi,mem_lim_max_mi
+adminservice,perf-admin,2000,3000,3072,4096,10,20,20000,30000,30720,40960,40000,60000,61440,81920
+javautilityapisimulator,perf-simulators,1000,2000,1024,2048,2,10,2000,4000,2048,4096,10000,20000,10240,20480
+kmsservice,perf-kms,1200,4000,2048,4096,2,10,2400,8000,4096,8192,12000,40000,20480,40960
+merchantservice,perf-merchant,500,3000,2048,3072,2,15,1000,6000,4096,6144,7500,45000,30720,46080
+merchantsimulaterfe,perf-simulators,150,500,512,1024,1,4,150,500,512,1024,600,2000,2048,4096
+paymentservice,perf-transaction,1000,3000,3072,4096,10,20,10000,30000,30720,40960,20000,60000,61440,81920
+perfsimulator,perf-simulators,500,2000,1024,2048,1,6,500,2000,1024,2048,3000,12000,6144,12288
+reportservice,perf-merchant,600,2500,2048,4096,1,10,600,2500,2048,4096,6000,25000,20480,40960
+stubsservice,perf-simulators,2000,3000,2048,4096,2,5,4000,6000,4096,8192,10000,15000,10240,20480
+transactionservice,perf-transaction,3000,5000,3072,6144,15,30,45000,75000,46080,92160,90000,150000,92160,184320
+TOTAL,,,,,,,,85650,164000,125440,207872,199100,429000,315392,533504
+[osuser@bastion perf-test-20260828_163155]$ head perf_capacity_before_*/hpa_state.csv
+namespace,hpa,min,max,current,desired
+perf-admin,admin-adminservice-hpa,10,20,10,10
+perf-frontend,merchantfe-merchant-frontend-hpa,1,4,1,1
+perf-frontend,transactionfe-transaction-frontend-hpa,2,6,5,5
+perf-istio-system,istio-gateway-hpa,2,6,6,6
+perf-istio-system,istiod-hpa,2,6,,0
+perf-istio-system,istiod-perf-istio,1,5,2,2
+perf-kms,kms-kmsservice-hpa,2,10,2,2
+perf-merchant,merchant-merchantservice-hpa,2,15,2,2
+perf-merchant,report-reportservice-hpa,1,10,1,1
+[osuser@bastion perf-test-20260828_163155]$

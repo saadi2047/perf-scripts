@@ -145,6 +145,19 @@ with open(os.path.join(outdir, "node_trends.csv"), "w") as f:
         f.write(f"{node},{cavg:.1f},{cpk:.1f},{mavg:.1f},{mpk:.1f},{cmavg:.0f},{cmpk:.0f}\n")
 print(f"[infra] node utilization aggregated for {len(node_samples)} nodes")
 
+
+# ---- run time window (for the report header) ----
+tss=[]
+pu=os.path.join(outdir,"pod_usage.csv")
+if os.path.exists(pu):
+    for r in csv.DictReader(open(pu)):
+        if r.get("ts"): tss.append(r["ts"])
+if tss:
+    with open(os.path.join(outdir,"window.txt"),"w") as f:
+        f.write(f"start={min(tss)}\n")
+        f.write(f"end={max(tss)}\n")
+        f.write(f"samples={nsamp}\n")
+
 print(f"[infra] {len(services)} services, {nsamp} samples")
 print(f"[infra] {len(findings)} findings written")
 for x in findings[:6]: print("   -", x)

@@ -1,38 +1,11 @@
-[osuser@bastion perf-testing]$ ll
-total 80
--rw-r----- 1 osuser osuser  4829 Aug 28 15:58 alloc_parse.py
--rw-r----- 1 osuser osuser  2537 Aug 28 13:41 app_parse.py
--rw-r----- 1 osuser osuser  6814 Aug 28 13:41 capacity_parse.py
--rw-r----- 1 osuser osuser  1939 Aug 28 13:08 cap_extras.py
--rw-r----- 1 osuser osuser  7227 Aug 28 15:44 infra_parse.py
--rwxr-x--- 1 osuser osuser  5066 Aug 28 13:10 perf-app.sh
--rwxr-x--- 1 osuser osuser  4230 Aug 28 15:43 perf-capacity.sh
--rwxr-x--- 1 osuser osuser  6048 Aug 28 13:11 perf-infra.sh
--rw-r----- 1 osuser osuser 19605 Aug 28 15:45 perf_report.py
--rwxr-x--- 1 osuser osuser  3000 Aug 28 13:12 perf-run.sh
-[osuser@bastion perf-testing]$ vi perf_report.py
-[osuser@bastion perf-testing]$ vi perf-run.sh
-[osuser@bastion perf-testing]$ vi cap_extras.py
-[osuser@bastion perf-testing]$ ./perf-run.sh before
-Traceback (most recent call last):
-  File "./perf-run.sh", line 22, in <module>
-    with open(os.path.join(outdir, "hpa_state.csv"), "w") as f:
-FileNotFoundError: [Errno 2] No such file or directory: 'before/hpa_state.csv'
-[osuser@bastion perf-testing]$ ls -lrth
-total 80K
--rwxr-x--- 1 osuser osuser 5.0K Aug 28 13:10 perf-app.sh
--rwxr-x--- 1 osuser osuser 6.0K Aug 28 13:11 perf-infra.sh
--rw-r----- 1 osuser osuser 2.5K Aug 28 13:41 app_parse.py
--rw-r----- 1 osuser osuser 6.7K Aug 28 13:41 capacity_parse.py
--rwxr-x--- 1 osuser osuser 4.2K Aug 28 15:43 perf-capacity.sh
--rw-r----- 1 osuser osuser 7.1K Aug 28 15:44 infra_parse.py
--rw-r----- 1 osuser osuser 4.8K Aug 28 15:58 alloc_parse.py
--rw-r----- 1 osuser osuser  20K Aug 28 16:25 perf_report.py
--rwxr-x--- 1 osuser osuser 2.0K Aug 28 16:25 perf-run.sh
--rw-r----- 1 osuser osuser 1.9K Aug 28 16:26 cap_extras.py
-[osuser@bastion perf-testing]$ ./perf-run.sh before
-Traceback (most recent call last):
-  File "./perf-run.sh", line 22, in <module>
-    with open(os.path.join(outdir, "hpa_state.csv"), "w") as f:
-FileNotFoundError: [Errno 2] No such file or directory: 'before/hpa_state.csv'
-[osuser@bastion perf-testing]$
+cd /home/osuser/saadi/M/Muzzammil/perf-testing
+
+# each should show the right shebang
+head -1 perf-run.sh        # must be: #!/usr/bin/env sh
+head -1 cap_extras.py      # must be: #!/usr/bin/env python3
+
+# re-set executable bit
+chmod +x perf-run.sh
+
+# then test
+./perf-run.sh before

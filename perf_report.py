@@ -105,8 +105,21 @@ def section_deltas(before, after):
         h.append('</table></details>')
     return "".join(h)
 
+def _fmt_ts(iso):
+    # 2026-08-28T07:46:04Z -> "13:16:04 IST / 07:46:04 UTC (28 Aug)"
+    try:
+        import datetime
+        d=datetime.datetime.strptime(iso,"%Y-%m-%dT%H:%M:%SZ")
+        ist=d+datetime.timedelta(hours=5,minutes=30)
+        return ist.strftime("%H:%M:%S IST") + " / " + d.strftime("%H:%M:%S UTC (%d %b)")
+    except: return iso
+
 def section_trends(infra):
-    h=['<h2>2 · What happened during the hour</h2>']
+    win=read_kv(os.path.join(infra,"window.txt")) if infra else {}
+    hdr="2 · What happened during the run"
+    if win.get("start") and win.get("end"):
+        hdr += f' <span style="font-size:12px;font-weight:400;color:var(--mut)">({_fmt_ts(win["start"])} → {_fmt_ts(win["end"])}, {win.get("samples","?")} samples)</span>'
+    h=[f'<h2>{hdr}</h2>']
     finds=read_lines(os.path.join(infra,"findings.txt")) if infra else []
     trends=read_csv(os.path.join(infra,"service_trends.csv")) if infra else []
     if not finds and not trends:
@@ -202,7 +215,18 @@ def section_hpa(before):
 def section_alloc(before):
     rows=read_csv(os.path.join(before,"resource_alloc.csv")) if before else []
     if not rows: return ""
+    # cluster app-worker capacity for context
+    cls=read_csv(os.path.join(before,"capacity_by_class.csv")) if before else []
+    appc=next((c for c in cls if c["class"]=="app-worker"), {})
     h=['<h2>6 · Resource allocation (request / limit \u00d7 replicas)</h2>']
+    if appc:
+        h.append('<div class="grid">')
+        h.append(f'<div class="kpi"><div class="lbl">App-worker nodes</div><div class="val">{appc.get("nodes","–")}</div></div>')
+        h.append(f'<div class="kpi"><div class="lbl">Total CPU (allocatable)</div><div class="val">{appc.get("alloc_cores","–")} cores</div></div>')
+        h.append(f'<div class="kpi"><div class="lbl">Reserved now</div><div class="val">{appc.get("reserved_cores","–")} cores</div></div>')
+        h.append(f'<div class="kpi"><div class="lbl">Free</div><div class="val good">{appc.get("free_cores","–")} cores</div></div>')
+        h.append(f'<div class="kpi"><div class="lbl">Total memory (allocatable)</div><div class="val">{appc.get("alloc_mem_gb","–")} GB</div></div>')
+        h.append('</div>')
     h.append('<p class="muted">Per-service pod request &amp; limit, then multiplied by current and max HPA replicas '
              'to show total provisioned CPU/memory. Bottom row = fleet total.</p>')
     # CPU table
@@ -254,7 +278,9 @@ def build_verdict(before, after, infra, app):
     return (cls,"During this run, "+"; ".join(bits)+". See the sections below for the per-service detail.")
 
 def build(a):
-    now=datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    _utc=datetime.datetime.now(datetime.timezone.utc)
+    _ist=_utc+datetime.timedelta(hours=5,minutes=30)
+    now=_ist.strftime("%Y-%m-%d %H:%M IST")+" / "+_utc.strftime("%H:%M UTC")
     man=read_kv(os.path.join(a.before,"manifest.txt")) if a.before else {}
     vcls,vtext=build_verdict(a.before,a.after,a.infra,a.app)
     H=['<!doctype html><html><head><meta charset="utf-8"><title>PERF Report</title>',CSS,'</head><body><div class="wrap">']
@@ -262,7 +288,8 @@ def build(a):
              f'<div class="sub">Prepared by Saadi M Muzzammil · generated {now}</div>'
              '<div class="sub" style="margin-top:8px">'
              '<a href="https://oneviewuat.sbi/" style="color:#cfe3ff;margin-right:16px">Dynatrace ↗</a>'
-             '<a href="https://console-openshift-console.apps.preprod.epay.sbi/" style="color:#cfe3ff">OCP Console ↗</a>'
+             '<a href="https://console-openshift-console.apps.preprod.epay.sbi/" style="color:#cfe3ff;margin-right:16px">OCP Console ↗</a>'
+             '<a href="http://10.177.139.68:3000/" style="color:#cfe3ff">Grafana ↗</a>'
              '</div></div>')
     H.append(f'<div class="verdict {vcls}"><b>Summary.</b> {vtext}</div>')
     H.append(section_deltas(a.before,a.after))

@@ -12,12 +12,16 @@ def svc_of(pod):
     return core[1] if len(core) > 1 else (core[0] if core else pod)
 
 tot = defaultdict(lambda: defaultdict(int))  # svc -> severity -> count
+pods = defaultdict(lambda: defaultdict(set))  # svc -> severity -> {pod names}
 path = os.path.join(outdir, "log_signal_counts.csv")
 if os.path.exists(path):
     for r in csv.DictReader(open(path)):
         svc = svc_of(r["pod"])
         for k in ("errors","warns","exceptions","gc","conn_pool","http503"):
-            try: tot[svc][k] += int(r[k] or 0)
+            try:
+                v=int(r[k] or 0)
+                tot[svc][k] += v
+                if v>0: pods[svc][k].add(r["pod"])
             except: pass
 
 with open(os.path.join(outdir, "log_summary.csv"), "w") as f:
@@ -29,16 +33,21 @@ with open(os.path.join(outdir, "log_summary.csv"), "w") as f:
 findings = []
 for svc in sorted(tot):
     t = tot[svc]
+    def podlist(sev):
+        ps=sorted(pods[svc][sev])
+        if not ps: return ""
+        shown=", ".join(ps[:3])
+        return f" [pods: {shown}{' +'+str(len(ps)-3)+' more' if len(ps)>3 else ''}]"
     if t["conn_pool"] > 0:
-        findings.append(f"{svc}: {t['conn_pool']} connection-pool warning(s) in logs (Hikari exhaustion / unable to acquire).")
+        findings.append(f"{svc}: {t['conn_pool']} connection-pool warning(s) (Hikari exhaustion / unable to acquire).{podlist('conn_pool')}")
     if t["http503"] > 0:
-        findings.append(f"{svc}: {t['http503']} HTTP 503 / service-unavailable line(s).")
+        findings.append(f"{svc}: {t['http503']} HTTP 503 / service-unavailable line(s).{podlist('http503')}")
     if t["exceptions"] > 0:
-        findings.append(f"{svc}: {t['exceptions']} exception/stacktrace occurrence(s).")
+        findings.append(f"{svc}: {t['exceptions']} exception/stacktrace occurrence(s).{podlist('exceptions')}")
     if t["gc"] > 0:
-        findings.append(f"{svc}: {t['gc']} GC-pause log line(s).")
+        findings.append(f"{svc}: {t['gc']} GC-pause log line(s).{podlist('gc')}")
     if t["errors"] > 20:
-        findings.append(f"{svc}: {t['errors']} ERROR-level line(s) — elevated.")
+        findings.append(f"{svc}: {t['errors']} ERROR-level line(s) — elevated.{podlist('errors')}")
 
 with open(os.path.join(outdir, "findings.txt"), "w") as f:
     if findings:

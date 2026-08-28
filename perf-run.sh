@@ -49,8 +49,8 @@ case "$CMD" in
   during)
     RUN=$(current_run); echo "[*] run folder: $RUN"
     echo "[*] launching infra + app collectors in parallel for $((DURATION/60)) min..."
-    sh "$D/perf-infra.sh" -i "$INTERVAL" -d "$DURATION" -o "$RUN" & IP=$!
-    sh "$D/perf-app.sh"   -i "$INTERVAL" -d "$DURATION" -o "$RUN" & AP=$!
+    sh "$D/perf-infra.sh" -i "$INTERVAL" -d "$DURATION" -o "$RUN" 2>&1 | sed 's/^/[infra] /' & IP=$!
+    sh "$D/perf-app.sh"   -i "$INTERVAL" -d "$DURATION" -o "$RUN" 2>&1 | sed 's/^/[app]   /' & AP=$!
     wait "$IP"; wait "$AP"
     echo "[✓] both collectors finished"
     ;;

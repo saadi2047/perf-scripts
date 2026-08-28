@@ -1,1 +1,5 @@
-http://10.177.139.68:3000/
+[osuser@bastion perf-testing]$ ./perf-run.sh before
+[*] NEW run folder: /home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260828_145606
+[*] perf-capacity.sh  phase=before  out=/home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260828_145606/perf_capacity_before_20260828_145607
+[*] capturing raw node + pod data...
+

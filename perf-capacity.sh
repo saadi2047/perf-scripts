@@ -42,17 +42,32 @@ echo "[*] perf-capacity.sh  phase=$PHASE  out=$OUTDIR"
 
 # ---- 1. Raw captures (the micro-detail, kept verbatim) ----
 echo "[*] capturing raw node + pod data..."
-oc get nodes -o json > "$OUTDIR/raw/nodes.json" 2>/dev/null
-oc get nodes --show-labels > "$OUTDIR/raw/nodes_labels.txt" 2>/dev/null
-oc adm top nodes > "$OUTDIR/raw/top_nodes.txt" 2>/dev/null
-oc describe nodes > "$OUTDIR/raw/describe_nodes.txt" 2>/dev/null
-oc get pods -A -o wide > "$OUTDIR/raw/pods_all.txt" 2>/dev/null
-oc get hpa -A > "$OUTDIR/raw/hpa_all.txt" 2>/dev/null
-oc get hpa -A -o json > "$OUTDIR/raw/hpa_all.json" 2>/dev/null
+
+# capture with retry + non-empty verification (heavy cluster-wide queries can
+# transiently return empty under API load; retry up to 3x and warn if still empty)
+capture() {  # $1=outfile  $2..=command
+  out="$1"; shift
+  n=0
+  while [ "$n" -lt 3 ]; do
+    "$@" > "$out" 2>/dev/null
+    [ -s "$out" ] && return 0
+    n=$((n+1)); sleep 3
+  done
+  echo "    [!] WARN: '$*' returned EMPTY after 3 tries -> $out (report data will be incomplete)"
+  return 1
+}
+
+capture "$OUTDIR/raw/nodes.json"        oc get nodes -o json
+capture "$OUTDIR/raw/nodes_labels.txt"  oc get nodes --show-labels
+capture "$OUTDIR/raw/top_nodes.txt"     oc adm top nodes
+capture "$OUTDIR/raw/describe_nodes.txt" oc describe nodes
+capture "$OUTDIR/raw/pods_all.txt"      oc get pods -A -o wide
+capture "$OUTDIR/raw/hpa_all.txt"       oc get hpa -A
+capture "$OUTDIR/raw/hpa_all.json"      oc get hpa -A -o json
 
 # per-pod resource requests/limits for the perf namespaces (for allocation section)
 for ns in $NAMESPACES; do
-  oc -n "$ns" get pods -o json > "$OUTDIR/raw/pods_${ns}.json" 2>/dev/null
+  capture "$OUTDIR/raw/pods_${ns}.json" oc -n "$ns" get pods -o json
 done
 
 echo "[*] raw capture done. (parser + HTML in next build step)"

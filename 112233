@@ -1,16 +1,59 @@
-[osuser@bastion perf-testing]$ ./perf-run.sh before
-Traceback (most recent call last):
-  File "./perf-run.sh", line 22, in <module>
-    with open(os.path.join(outdir, "hpa_state.csv"), "w") as f:
-FileNotFoundError: [Errno 2] No such file or directory: 'before/hpa_state.csv'
-[osuser@bastion perf-testing]$ head -1 perf-run.sh
-#!/usr/bin/env python3
-[osuser@bastion perf-testing]$ head -1 cap_extras.py
-#!/usr/bin/env python3
-[osuser@bastion perf-testing]$ chmod +x perf-run.sh
-[osuser@bastion perf-testing]$ ./perf-run.sh before
-Traceback (most recent call last):
-  File "./perf-run.sh", line 22, in <module>
-    with open(os.path.join(outdir, "hpa_state.csv"), "w") as f:
-FileNotFoundError: [Errno 2] No such file or directory: 'before/hpa_state.csv'
-[osuser@bastion perf-testing]$
+cat > perf-run.sh << 'PERFRUN_EOF'
+#!/usr/bin/env sh
+# ============================================================================
+# perf-run.sh — one entry point for the whole PERF load-test capture
+# SBI ePay 2.0 PERF · Saadi M Muzzammil
+# ============================================================================
+set -u
+CMD="${1:-help}"; shift 2>/dev/null || true
+INTERVAL=60; DURATION=3600
+BASE="$(pwd)"
+MARKER="$BASE/.perf_current_run"
+while [ $# -gt 0 ]; do case "$1" in
+  -i) INTERVAL="$2"; shift 2;; -d) DURATION="$2"; shift 2;; *) shift;; esac; done
+D=$(dirname "$0")
+
+new_run() {
+  RUN="$BASE/perf-test-$(date +%Y%m%d_%H%M%S)"
+  mkdir -p "$RUN"
+  echo "$RUN" > "$MARKER"
+  echo "$RUN"
+}
+current_run() {
+  if [ -f "$MARKER" ]; then cat "$MARKER"; else new_run; fi
+}
+newest() { for d in $(ls -dt "$1"/$2 2>/dev/null); do [ -d "$d" ] && { echo "$d"; return; }; done; }
+
+case "$CMD" in
+  before)
+    RUN=$(new_run)
+    echo "[*] NEW run folder: $RUN"
+    sh "$D/perf-capacity.sh" --phase before -o "$RUN"
+    ;;
+  new)
+    RUN=$(new_run); echo "[*] NEW run folder ready: $RUN"
+    ;;
+  during)
+    RUN=$(current_run); echo "[*] run folder: $RUN"
+    echo "[*] launching infra + app collectors in parallel for $((DURATION/60)) min..."
+    sh "$D/perf-infra.sh" -i "$INTERVAL" -d "$DURATION" -o "$RUN" 2>&1 | sed 's/^/[infra] /' & IP=$!
+    sh "$D/perf-app.sh"   -i "$INTERVAL" -d "$DURATION" -o "$RUN" 2>&1 | sed 's/^/[app]   /' & AP=$!
+    wait "$IP"; wait "$AP"
+    echo "[OK] both collectors finished"
+    ;;
+  after)
+    RUN=$(current_run); echo "[*] run folder: $RUN"
+    sh "$D/perf-capacity.sh" --phase after -o "$RUN"
+    ;;
+  report)
+    RUN=$(current_run); echo "[*] run folder: $RUN"
+    B=$(newest "$RUN" 'perf_capacity_before_*'); A=$(newest "$RUN" 'perf_capacity_after_*')
+    I=$(newest "$RUN" 'perf_infra_*'); AP=$(newest "$RUN" 'perf_app_*')
+    echo "    before=$B"; echo "    after=$A"; echo "    infra=$I"; echo "    app=$AP"
+    OUT="$RUN/PERF_Report_$(date +%Y%m%d_%H%M%S).html"
+    python3 "$D/perf_report.py" ${B:+--before "$B"} ${A:+--after "$A"} ${I:+--infra "$I"} ${AP:+--app "$AP"} -o "$OUT"
+    echo "[OK] report: $OUT"
+    ;;
+  *) grep '^#' "$0" | sed 's/^# \{0,1\}//' ;;
+esac
+PERFRUN_EOF

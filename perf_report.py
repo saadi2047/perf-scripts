@@ -96,11 +96,18 @@ def section_deltas(before, after):
         facts.append(f'Reserved CPU on the 12 app-worker nodes went <span class="delta {arrow}">{rb:.0f}c → {ra:.0f}c</span> ({"+" if d>=0 else ""}{d:.0f}c) between before and after load.')
     except: pass
     # pending delta
-    facts.append(f'Pending pods: <span class="delta {"up" if len(ap)>len(bp) else "flat"}">{len(bp)} → {len(ap)}</span>.')
+    facts.append(f'Pods awaiting scheduling: <span class="delta {"up" if len(ap)>len(bp) else "flat"}">{len(bp)} → {len(ap)}</span>.')
+    # list the actual pending pods (name + namespace), and note if they're non-app (infra) pods
+    def pending_detail(plist):
+        if not plist: return ""
+        items=[f'<li>{p.get("namespace","")} / {p.get("pod","")}</li>' for p in plist]
+        return '<p class="muted" style="margin-top:6px">Pods awaiting scheduling:</p><ul class="findings">'+"".join(items)+'</ul>'
+    pend_html = pending_detail(ap if ap else bp)
     # fit
     if bf.get("can_fit_3000m_txn_pod"):
         facts.append(f'A new 3000m transaction pod could be placed: <b>before</b> {bf.get("can_fit_3000m_txn_pod","?")}, <b>after</b> {af.get("can_fit_3000m_txn_pod","?")} (largest free slot {bf.get("largest_single_node_free_cpu_m","?")}m → {af.get("largest_single_node_free_cpu_m","?")}m).')
     h.append('<ul class="findings">'+"".join(li(f) for f in facts)+'</ul>')
+    if pend_html: h.append(pend_html)
     # secondary table
     if bc:
         h.append('<details><summary>Capacity by node class (detail)</summary><table><tr><th>Class</th><th>Nodes</th><th>Alloc (c)</th><th>Reserved before</th><th>Reserved after</th></tr>')

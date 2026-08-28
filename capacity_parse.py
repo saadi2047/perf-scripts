@@ -95,17 +95,17 @@ with open(os.path.join(outdir, "node_capacity.csv"), "w") as f:
 
 # ---- capacity summary BY CLASS (the fix for 232-vs-186) ----
 from collections import defaultdict
-byc = defaultdict(lambda: {"n":0,"alloc":0,"resv":0,"free":0})
+byc = defaultdict(lambda: {"n":0,"alloc":0,"resv":0,"free":0,"amem":0})
 for r in rows:
     c = byc[r["class"]]
-    c["n"] += 1; c["alloc"] += r["alloc_cpu_m"]
+    c["n"] += 1; c["alloc"] += r["alloc_cpu_m"]; c["amem"] += r["alloc_mem_mi"]
     if isinstance(r["reserved_cpu_m"], int): c["resv"] += r["reserved_cpu_m"]
     if isinstance(r["free_cpu_m"], int): c["free"] += r["free_cpu_m"]
 
 with open(os.path.join(outdir, "capacity_by_class.csv"), "w") as f:
-    f.write("class,nodes,alloc_cores,reserved_cores,free_cores\n")
+    f.write("class,nodes,alloc_cores,reserved_cores,free_cores,alloc_mem_gb\n")
     for c, d in sorted(byc.items()):
-        f.write(f"{c},{d['n']},{d['alloc']/1000:.1f},{d['resv']/1000:.1f},{d['free']/1000:.1f}\n")
+        f.write(f"{c},{d['n']},{d['alloc']/1000:.1f},{d['resv']/1000:.1f},{d['free']/1000:.1f},{d['amem']/1024:.0f}\n")
 
 # largest single-node free slot among app-workers (can a 3000m pod fit?)
 APP_CLASSES = ("app-worker",)

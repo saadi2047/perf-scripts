@@ -35,6 +35,10 @@ for pj in glob.glob(os.path.join(raw,"pods_*.json")):
     for pod in data.get("items",[]):
         name=pod["metadata"]["name"]
         svc=svc_of(name)
+        # skip infra/monitoring pods that aren't app services
+        low=name.lower()
+        if any(j in low for j in ("grafana","collector","prometheus","loki","alertmanager","exporter","operator")):
+            continue
         if svc in svc_res: continue  # one per service is enough
         # sum across app containers (skip istio-proxy)
         cr=cl=mr=ml=0

@@ -51,17 +51,35 @@ for pj in glob.glob(os.path.join(raw,"pods_*.json")):
             svc_res[svc]={"ns":ns,"cpu_req":cr,"cpu_lim":cl,"mem_req":mr,"mem_lim":ml}
 
 # --- current & max replicas per service from hpa_all.json ---
+# Match each service to its HPA within the SAME namespace, preferring the HPA whose
+# scaleTargetRef service-token equals the service exactly (avoids frontend/pre-prod mismatches).
 hpa_cur={}; hpa_max={}
+hpa_list=[]
 try:
     for h in json.load(open(os.path.join(raw,"hpa_all.json"))).get("items",[]):
-        tgt=h.get("spec",{}).get("scaleTargetRef",{}).get("name","")
-        cur=h.get("status",{}).get("currentReplicas",0); mx=h.get("spec",{}).get("maxReplicas",0)
-        # match by service token in target name
-        s=svc_of(tgt) if "-" in tgt else tgt
-        for svc in svc_res:
-            if svc in tgt or svc==s:
-                hpa_cur[svc]=cur; hpa_max[svc]=mx
+        hpa_list.append({
+            "ns": h["metadata"]["namespace"],
+            "tgt": h.get("spec",{}).get("scaleTargetRef",{}).get("name",""),
+            "cur": h.get("status",{}).get("currentReplicas",0),
+            "max": h.get("spec",{}).get("maxReplicas",0),
+        })
 except: pass
+
+for svc in svc_res:
+    svc_ns = svc_res[svc]["ns"]
+    best=None
+    for hp in hpa_list:
+        if hp["ns"] != svc_ns:          # must be same namespace as the pod
+            continue
+        tgt_svc = svc_of(hp["tgt"]) if "-" in hp["tgt"] else hp["tgt"]
+        if tgt_svc == svc:              # exact service-token match — strongest
+            best=hp; break
+    if not best:                        # fallback: substring within same namespace
+        for hp in hpa_list:
+            if hp["ns"]==svc_ns and svc in hp["tgt"]:
+                best=hp; break
+    if best:
+        hpa_cur[svc]=best["cur"]; hpa_max[svc]=best["max"]
 
 # --- write resource_alloc.csv ---
 with open(os.path.join(outdir,"resource_alloc.csv"),"w") as f:

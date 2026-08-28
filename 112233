@@ -1,11 +1,16 @@
-cd /home/osuser/saadi/M/Muzzammil/perf-testing
-
-# each should show the right shebang
-head -1 perf-run.sh        # must be: #!/usr/bin/env sh
-head -1 cap_extras.py      # must be: #!/usr/bin/env python3
-
-# re-set executable bit
-chmod +x perf-run.sh
-
-# then test
-./perf-run.sh before
+[osuser@bastion perf-testing]$ ./perf-run.sh before
+Traceback (most recent call last):
+  File "./perf-run.sh", line 22, in <module>
+    with open(os.path.join(outdir, "hpa_state.csv"), "w") as f:
+FileNotFoundError: [Errno 2] No such file or directory: 'before/hpa_state.csv'
+[osuser@bastion perf-testing]$ head -1 perf-run.sh
+#!/usr/bin/env python3
+[osuser@bastion perf-testing]$ head -1 cap_extras.py
+#!/usr/bin/env python3
+[osuser@bastion perf-testing]$ chmod +x perf-run.sh
+[osuser@bastion perf-testing]$ ./perf-run.sh before
+Traceback (most recent call last):
+  File "./perf-run.sh", line 22, in <module>
+    with open(os.path.join(outdir, "hpa_state.csv"), "w") as f:
+FileNotFoundError: [Errno 2] No such file or directory: 'before/hpa_state.csv'
+[osuser@bastion perf-testing]$

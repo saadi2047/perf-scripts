@@ -1,21 +1,7 @@
-why you are making silly mistaks
+cd /home/osuser/saadi/M/Muzzammil/perf-testing
+# after placing all 10 files:
+chmod +x perf-run.sh perf-capacity.sh perf-infra.sh perf-app.sh
+# verify shebangs (the crossing guard):
+head -1 perf-run.sh    # #!/usr/bin/env sh
+head -1 *.py           # #!/usr/bin/env python3
 
-copy button should be beside pod name not at the end of the line
-
-we are not calculating CPU in milicore so why you are highliting it on the section name CPU (millicores) remove the (milicore) from heading
-
-
-
-also pod distrbution you made it very confusing make it easy to understanding we have 12 worker nodes 5 gemfire 7 workers
-
-so there will be 12 rows only just like excel we do merging the rows attached the screenshot for you reffrence 
-
-
-
-also pod spinup add the 
-
-add more names spaces
-
-perf-kms
-
-perf-payment

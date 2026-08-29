@@ -1,7 +1,72 @@
-cd /home/osuser/saadi/M/Muzzammil/perf-testing
-# after placing all 10 files:
-chmod +x perf-run.sh perf-capacity.sh perf-infra.sh perf-app.sh
-# verify shebangs (the crossing guard):
-head -1 perf-run.sh    # #!/usr/bin/env sh
-head -1 *.py           # #!/usr/bin/env python3
+[osuser@bastion ~]$ cd saadi/
+M/                       PLM_2026-08-28_18-35-20/
+[osuser@bastion ~]$ cd saadi/M/Muzzammil/perf-testing/
+[osuser@bastion perf-testing]$ ll
+total 11580
+-rw-r----- 1 osuser osuser     4829 Aug 28 15:58 alloc_parse.py
+-rw-r----- 1 osuser osuser     2537 Aug 28 13:41 app_parse.py
+-rw-r----- 1 osuser osuser     6814 Aug 28 13:41 capacity_parse.py
+-rw-r----- 1 osuser osuser     1939 Aug 28 16:26 cap_extras.py
+-rw-r----- 1 osuser osuser     7227 Aug 28 15:44 infra_parse.py
+-rwxr-x--- 1 osuser osuser     5066 Aug 28 13:10 perf-app.sh
+-rwxr-x--- 1 osuser osuser     4230 Aug 28 15:43 perf-capacity.sh
+-rwxr-x--- 1 osuser osuser     6048 Aug 28 13:11 perf-infra.sh
+-rw-r----- 1 osuser osuser    20081 Aug 28 16:25 perf_report.py
+-rwxr-x--- 1 osuser osuser     2184 Aug 28 16:31 perf-run.sh
+drwxr-x--- 6 osuser osuser     4096 Aug 28 18:40 perf-test-20260828_172903
+-rw-r----- 1 osuser osuser 11770682 Aug 28 18:43 script-op.zip
+[osuser@bastion perf-testing]$ rm -rf perf-test-20260828_172903 script-op.zip
+[osuser@bastion perf-testing]$ ll
+total 80
+-rw-r----- 1 osuser osuser  4829 Aug 28 15:58 alloc_parse.py
+-rw-r----- 1 osuser osuser  2537 Aug 28 13:41 app_parse.py
+-rw-r----- 1 osuser osuser  6814 Aug 28 13:41 capacity_parse.py
+-rw-r----- 1 osuser osuser  1939 Aug 28 16:26 cap_extras.py
+-rw-r----- 1 osuser osuser  7227 Aug 28 15:44 infra_parse.py
+-rwxr-x--- 1 osuser osuser  5066 Aug 28 13:10 perf-app.sh
+-rwxr-x--- 1 osuser osuser  4230 Aug 28 15:43 perf-capacity.sh
+-rwxr-x--- 1 osuser osuser  6048 Aug 28 13:11 perf-infra.sh
+-rw-r----- 1 osuser osuser 20081 Aug 28 16:25 perf_report.py
+-rwxr-x--- 1 osuser osuser  2184 Aug 28 16:31 perf-run.sh
+[osuser@bastion perf-testing]$ vi app_parse.py
+[osuser@bastion perf-testing]$ vi cap_extras.py
+[osuser@bastion perf-testing]$ vi infra_parse.py
+[osuser@bastion perf-testing]$ vi perf-app.sh
+[osuser@bastion perf-testing]$ vi perf-capacity.sh
+[osuser@bastion perf-testing]$ vi perf-infra.sh
+[osuser@bastion perf-testing]$ vi perf-run.sh
+[osuser@bastion perf-testing]$ vi perf_report.py
+[osuser@bastion perf-testing]$ chmod +x perf-run.sh perf-capacity.sh perf-infra.sh perf-app.sh
+[osuser@bastion perf-testing]$ head -1 perf-run.sh
+#!/usr/bin/env sh
+[osuser@bastion perf-testing]$ head -1 *.py
+==> alloc_parse.py <==
+#!/usr/bin/env python3
 
+==> app_parse.py <==
+#!/usr/bin/env python3
+
+==> capacity_parse.py <==
+#!/usr/bin/env python3
+
+==> cap_extras.py <==
+#!/usr/bin/env python3
+
+==> infra_parse.py <==
+#!/usr/bin/env python3
+
+==> perf_report.py <==
+#!/usr/bin/env python3
+[osuser@bastion perf-testing]$ head -1 *.sh
+==> perf-app.sh <==
+#!/usr/bin/env sh
+
+==> perf-capacity.sh <==
+#!/usr/bin/env sh
+
+==> perf-infra.sh <==
+#!/usr/bin/env sh
+
+==> perf-run.sh <==
+#!/usr/bin/env sh
+[osuser@bastion perf-testing]$

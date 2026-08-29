@@ -37,7 +37,7 @@ CSS = """<style>
 *{box-sizing:border-box}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
 margin:0;background:var(--bg);color:var(--ink);font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased}
-.wrap{max-width:1100px;margin:0 auto;padding:20px}
+.wrap{max-width:1600px;margin:0 auto;padding:24px 40px}
 @media(max-width:640px){.wrap{padding:12px}}
 h1{font-size:22px;margin:0 0 4px}
 h2{font-size:17px;color:var(--head);margin:34px 0 14px;scroll-margin-top:60px;padding-bottom:8px;border-bottom:2px solid var(--accent);
@@ -375,12 +375,27 @@ def section_load_alloc(infra, before):
 def section_restarts(infra):
     rows=read_csv(os.path.join(infra,"restart_summary.csv")) if infra else []
     if not rows: return ""
+    # split app-service restarts (what matters) from infra noise (tempo/kafka/istio/otel)
+    INFRA=("tempo","kafka","istio","otel","collector","grafana","prometheus","loki","zookeeper")
+    app=[r for r in rows if not any(x in r["pod"].lower() or x in r["namespace"].lower() for x in INFRA)]
+    infra_noise=[r for r in rows if any(x in r["pod"].lower() or x in r["namespace"].lower() for x in INFRA)]
     h=['<h2>7 · Pod restarts &amp; reasons</h2>']
-    h.append('<ul class="findings">')
-    for r in rows[:6]:
-        cls="bad" if r["reason"] in ("OOMKilled","Error") else "warn"
-        h.append(f'<li class="{cls}">{r["pod"]} — {r["restarts"]} restart(s), reason: <b>{r["reason"]}</b> (exit {r["exit_code"]}) — {r["interpretation"]}</li>')
-    h.append('</ul>')
+    if app:
+        h.append('<p class="muted">App-service pods that restarted during the run, worst first. Exit 143 = SIGTERM (usually liveness-probe kill); 137 = OOMKilled.</p>')
+        h.append('<ul class="findings">')
+        for r in app[:10]:
+            cls="bad" if str(r["exit_code"]) in ("137","143") or r["reason"]=="OOMKilled" else "warn"
+            h.append(f'<li class="{cls}">{r["namespace"]} / {r["pod"]} — <b>{r["restarts"]} restart(s)</b>, {r["reason"]} (exit {r["exit_code"]}) — {r["interpretation"]}</li>')
+        h.append('</ul>')
+    else:
+        h.append('<p class="muted">No app-service pod restarts during the run.</p>')
+    # infra noise collapsed
+    if infra_noise:
+        h.append(f'<details><summary>Infrastructure pod restarts — {len(infra_noise)} pods (tempo / kafka / istio — not app services)</summary><div class="tbl-wrap">')
+        h.append('<table><tr><th>Namespace</th><th>Pod</th><th>Restarts</th><th>Reason</th><th>Exit</th></tr>')
+        for r in infra_noise[:20]:
+            h.append(f'<tr><td>{r["namespace"]}</td><td>{r["pod"]}</td><td>{r["restarts"]}</td><td>{r["reason"]}</td><td>{r["exit_code"]}</td></tr>')
+        h.append('</table></div></details>')
     return "".join(h)
 
 def section_distribution(infra):

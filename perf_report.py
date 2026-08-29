@@ -32,30 +32,66 @@ def fmt_mem(mi):
     return f"{mi:.0f} MB"
 
 CSS = """<style>
-:root{--bg:#f4f6f9;--card:#fff;--ink:#1a2733;--mut:#5b6b7b;--line:#d6dee6;--band:#eef3f8;
---head:#1f3a52;--accent:#2563a8;--good:#1a7f4b;--warn:#b7791f;--bad:#c0392b;}
-*{box-sizing:border-box}body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
-margin:0;background:var(--bg);color:var(--ink);font-size:14px;line-height:1.6}
-.wrap{max-width:1000px;margin:0 auto;padding:24px}
-h1{font-size:22px;margin:0 0 4px}h2{font-size:17px;color:var(--head);border-bottom:2px solid var(--accent);
-padding-bottom:6px;margin:32px 0 14px}
-.masthead{background:linear-gradient(135deg,#1f3a52,#2563a8);color:#fff;padding:22px 26px;border-radius:10px;margin-bottom:8px}
-.masthead .sub{opacity:.9;font-size:12.5px;margin-top:6px}
-.verdict{background:var(--card);border:1px solid var(--line);border-left:5px solid var(--accent);
-border-radius:8px;padding:16px 20px;margin:16px 0;font-size:15px}
+:root{--bg:#eef2f7;--card:#fff;--ink:#16212e;--mut:#5b6b7b;--line:#dce4ec;--band:#f2f6fa;
+--head:#16324a;--accent:#2563a8;--good:#1a7f4b;--warn:#b7791f;--bad:#c0392b;--shadow:0 2px 8px rgba(20,40,60,.08);}
+*{box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+margin:0;background:var(--bg);color:var(--ink);font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1100px;margin:0 auto;padding:20px}
+@media(max-width:640px){.wrap{padding:12px}}
+h1{font-size:22px;margin:0 0 4px}
+h2{font-size:17px;color:var(--head);margin:34px 0 14px;scroll-margin-top:60px;padding-bottom:8px;border-bottom:2px solid var(--accent);
+display:flex;align-items:center;gap:8px}
+h3{font-size:13px;color:var(--mut);margin:16px 0 8px;text-transform:uppercase;letter-spacing:.04em}
+.masthead{background:linear-gradient(135deg,#16324a,#2563a8);color:#fff;padding:24px 26px;border-radius:12px;
+box-shadow:var(--shadow);animation:fadeDown .5s ease}
+.masthead .sub{opacity:.92;font-size:12.5px;margin-top:6px}
+.masthead a{color:#d0e4ff;text-decoration:none;transition:opacity .2s}.masthead a:hover{opacity:.7}
+@keyframes fadeDown{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:none}}
+@keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+.verdict,.banner,section,table,.kpi,.findings li{animation:fadeUp .4s ease both}
+.verdict{background:var(--card);border-left:5px solid var(--accent);border-radius:10px;padding:16px 20px;
+margin:16px 0;font-size:15px;box-shadow:var(--shadow)}
 .verdict.good{border-left-color:var(--good)}.verdict.warn{border-left-color:var(--warn)}.verdict.bad{border-left-color:var(--bad)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin:14px 0}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;box-shadow:var(--shadow);
+transition:transform .2s,box-shadow .2s}
+.kpi:hover{transform:translateY(-2px);box-shadow:0 6px 16px rgba(20,40,60,.12)}
+.kpi .lbl{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.04em}
+.kpi .val{font-size:21px;font-weight:600;margin-top:4px}
+.kpi .val.good{color:var(--good)}.kpi .val.warn{color:var(--warn)}.kpi .val.bad{color:var(--bad)}
 .findings{list-style:none;padding:0;margin:10px 0}
-.findings li{background:var(--card);border:1px solid var(--line);border-radius:7px;padding:11px 15px;margin:7px 0;
-border-left:3px solid var(--accent)}
-.findings li.warn{border-left-color:var(--warn)}.findings li.bad{border-left-color:var(--bad)}.findings li.good{border-left-color:var(--good)}
-.findings li.noise{border-left-color:var(--mut);color:var(--mut)}
-details{margin:12px 0}summary{cursor:pointer;color:var(--accent);font-size:13px;font-weight:600;padding:6px 0}
-table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:8px;overflow:hidden;margin:8px 0;font-size:13px}
-th{background:var(--head);color:#fff;text-align:left;padding:7px 11px;font-size:12px}
-td{padding:6px 11px;border-top:1px solid var(--line)}tr:nth-child(even) td{background:var(--band)}
+.findings li{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:11px 15px;margin:7px 0;
+border-left:3px solid var(--accent);box-shadow:var(--shadow)}
+.findings li.warn{border-left-color:var(--warn)}.findings li.bad{border-left-color:var(--bad)}
+.findings li.good{border-left-color:var(--good)}.findings li.noise{border-left-color:var(--mut);color:var(--mut)}
+details{margin:12px 0;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:4px 14px;box-shadow:var(--shadow)}
+summary{cursor:pointer;color:var(--accent);font-size:13px;font-weight:600;padding:8px 0;user-select:none}
+summary:hover{color:var(--head)}
+.tbl-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:8px}
+table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);
+border-radius:8px;overflow:hidden;margin:8px 0;font-size:13px;box-shadow:var(--shadow)}
+th{background:var(--head);color:#fff;text-align:left;padding:8px 11px;font-size:12px;white-space:nowrap}
+td{padding:7px 11px;border-top:1px solid var(--line)}tr:nth-child(even) td{background:var(--band)}
+tr{transition:background .15s}tbody tr:hover td{background:#e8f0f8}
 .delta{font-weight:600}.up{color:var(--bad)}.dn{color:var(--good)}.flat{color:var(--mut)}
 .muted{color:var(--mut);font-size:12.5px}
-</style>"""
+.copybtn{cursor:pointer;border:1px solid var(--line);background:var(--band);border-radius:5px;
+padding:2px 8px;font-size:11px;color:var(--accent);margin-left:6px;transition:all .15s}
+.copybtn:hover{background:var(--accent);color:#fff}
+.copybtn:active{transform:scale(.94)}
+.pod-mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
+.nav{position:sticky;top:0;z-index:10;background:rgba(255,255,255,.95);backdrop-filter:blur(8px);
+border:1px solid var(--line);border-radius:8px;padding:9px 14px;margin:12px 0 18px;font-size:12px;box-shadow:var(--shadow)}
+.nav a{color:var(--accent);text-decoration:none;margin-right:14px;white-space:nowrap;transition:color .15s}
+.nav a:hover{color:var(--head)}
+@media(max-width:640px){.nav{overflow-x:auto;white-space:nowrap}h2{font-size:15px}.kpi .val{font-size:18px}}
+span[id]{scroll-margin-top:60px;display:block}
+</style>
+<script>
+function copyPod(t){navigator.clipboard.writeText(t).then(function(){
+var e=event.target;var o=e.textContent;e.textContent='✓';setTimeout(function(){e.textContent=o},1000);});}
+</script>"""
 
 def li(text, cls=""):
     return f'<li class="{cls}">{text}</li>'
@@ -69,6 +105,7 @@ def classify_finding(txt):
 
 def section_deltas(before, after):
     h=['<h2>1 · What changed from the load</h2>']
+    h.append('<p class="muted">This compares the cluster <b>before</b> the load started vs <b>after</b> it finished — showing what the load consumed and whether capacity held.</p>')
     bc=read_csv(os.path.join(before,"capacity_by_class.csv")) if before else []
     ac=read_csv(os.path.join(after,"capacity_by_class.csv")) if after else []
     bf=read_kv(os.path.join(before,"fit_check.txt")) if before else {}
@@ -83,39 +120,46 @@ def section_deltas(before, after):
         return {}
     ba,aa=approw(bc),approw(ac)
     facts=[]
-    # detect failed capacity capture (reserved=0 while alloc>0 means describe nodes came back empty)
     try:
         if float(ba.get("alloc_cores",0))>0 and float(ba.get("reserved_cores",0))==0:
             h.append('<div class="banner bad">⚠ Capacity capture incomplete this run — reserved/free CPU unavailable '
                      '(oc describe nodes returned empty). Re-run the before-snapshot for accurate reservation data.</div>')
     except: pass
-    # reserved cpu delta
+    # reserved cpu delta — spelled out plainly
     try:
         rb,ra=float(ba.get("reserved_cores",0)),float(aa.get("reserved_cores",0))
+        fb=float(ba.get("free_cores",0)); fa=float(aa.get("free_cores",0))
         d=ra-rb; arrow="up" if d>0 else ("dn" if d<0 else "flat")
-        facts.append(f'Reserved CPU on the 12 app-worker nodes went <span class="delta {arrow}">{rb:.0f}c → {ra:.0f}c</span> ({"+" if d>=0 else ""}{d:.0f}c) between before and after load.')
+        direction="more" if d>0 else "less"
+        facts.append(f'<b>CPU booked by pods</b> (reserved) went from <b>{rb:.0f} cores</b> before to <b>{ra:.0f} cores</b> after — '
+                     f'<span class="delta {arrow}">{abs(d):.0f} cores {direction}</span> used by the load, out of 186 total.')
+        facts.append(f'<b>Free CPU left</b> for new pods dropped from <b>{fb:.0f} cores</b> to <span class="delta {"up" if fa<fb else "flat"}">{fa:.0f} cores</span> — '
+                     f'this is the headroom that remained at the end of the run.')
     except: pass
-    # pending delta
-    facts.append(f'Pods awaiting scheduling: <span class="delta {"up" if len(ap)>len(bp) else "flat"}">{len(bp)} → {len(ap)}</span>.')
-    # list the actual pending pods (name + namespace), and note if they're non-app (infra) pods
+    # pending — plain
+    pcls="up" if len(ap)>len(bp) else "flat"
+    facts.append(f'<b>Pods stuck waiting to schedule</b>: <span class="delta {pcls}">{len(bp)} before → {len(ap)} after</span>. '
+                 f'{"Some pods could not get a node — see below." if len(ap)>0 else "None — every pod found a node."}')
     def pending_detail(plist):
         if not plist: return ""
         items=[f'<li>{p.get("namespace","")} / {p.get("pod","")}</li>' for p in plist]
         return '<p class="muted" style="margin-top:6px">Pods awaiting scheduling:</p><ul class="findings">'+"".join(items)+'</ul>'
     pend_html = pending_detail(ap if ap else bp)
-    # fit
+    # fit — plain
     if bf.get("can_fit_3000m_txn_pod"):
-        facts.append(f'A new 3000m transaction pod could be placed: <b>before</b> {bf.get("can_fit_3000m_txn_pod","?")}, <b>after</b> {af.get("can_fit_3000m_txn_pod","?")} (largest free slot {bf.get("largest_single_node_free_cpu_m","?")}m → {af.get("largest_single_node_free_cpu_m","?")}m).')
+        b_fit=bf.get("can_fit_3000m_txn_pod","?"); a_fit=af.get("can_fit_3000m_txn_pod","?")
+        facts.append(f'<b>Could a new transaction pod still be placed?</b> Before: <b>{b_fit}</b>, after: <b>{a_fit}</b> '
+                     f'(largest single-node free slot: {bf.get("largest_single_node_free_cpu_m","?")}m → {af.get("largest_single_node_free_cpu_m","?")}m). '
+                     f'{"Room remained." if a_fit=="YES" else "No single node had room for a 3-core pod."}')
     h.append('<ul class="findings">'+"".join(li(f) for f in facts)+'</ul>')
     if pend_html: h.append(pend_html)
-    # secondary table
     if bc:
-        h.append('<details><summary>Capacity by node class (detail)</summary><table><tr><th>Class</th><th>Nodes</th><th>Alloc (c)</th><th>Reserved before</th><th>Reserved after</th></tr>')
+        h.append('<details><summary>Capacity by node class (detail)</summary><div class="tbl-wrap"><table><tr><th>Class</th><th>Nodes</th><th>Alloc (c)</th><th>Reserved before</th><th>Reserved after</th></tr>')
         am={r["class"]:r for r in ac}
         for r in bc:
             a=am.get(r["class"],{})
             h.append(f'<tr><td>{r["class"]}</td><td>{r["nodes"]}</td><td>{r["alloc_cores"]}</td><td>{r["reserved_cores"]}</td><td>{a.get("reserved_cores","–")}</td></tr>')
-        h.append('</table></details>')
+        h.append('</table></div></details>')
     return "".join(h)
 
 def _fmt_ts(iso):
@@ -145,7 +189,7 @@ def section_trends(infra):
         for r in trends:
             h.append(f'<tr><td>{r["service"]}</td><td>{fmt_cpu(r["cpu_peak_m"])}</td><td>{fmt_cpu(r["cpu_settled_m"])}</td>'
                      f'<td>{fmt_mem(r["mem_peak_mi"])}</td><td>{r["pods_min"]}→{r["pods_max"]}</td><td>{r["restart_delta"]}</td></tr>')
-        h.append('</table></details>')
+        h.append('</table></div></details>')
     return "".join(h)
 
 def section_app(app):
@@ -157,10 +201,10 @@ def section_app(app):
         h.append('<ul class="findings">'+"".join(li(f, classify_finding(f)) for f in finds)+'</ul>')
     if summ:
         h.append('<details><summary>Log signal counts by service (detail)</summary>'
-                 '<table><tr><th>Service</th><th>Errors</th><th>Exceptions</th><th>Conn-pool</th><th>503</th><th>GC</th></tr>')
+                 '<div class="tbl-wrap"><table><tr><th>Service</th><th>Errors</th><th>Exceptions</th><th>Conn-pool</th><th>503</th></tr>')
         for r in summ:
-            h.append(f'<tr><td>{r["service"]}</td><td>{r["errors"]}</td><td>{r["exceptions"]}</td><td>{r["conn_pool"]}</td><td>{r["http503"]}</td><td>{r["gc"]}</td></tr>')
-        h.append('</table></details>')
+            h.append(f'<tr><td>{r["service"]}</td><td>{r["errors"]}</td><td>{r["exceptions"]}</td><td>{r["conn_pool"]}</td><td>{r["http503"]}</td></tr>')
+        h.append('</table></div></details>')
     h.append('<p class="muted">Application performance metrics (Hikari pool, GC, controller latency) are read from Dynatrace, not captured here.</p>')
     return "".join(h)
 
@@ -197,31 +241,46 @@ def section_nodes(before, after, infra):
     return "".join(h)
 
 
-def section_hpa(before):
+def section_hpa(before, after=None, infra=None):
     rows=read_csv(os.path.join(before,"hpa_state.csv")) if before else []
-    # perf namespaces only (exclude pre-prod, quay, stackrox, istio infra)
     perf=[r for r in rows if r.get("namespace","").startswith("perf-") and "istio" not in r.get("namespace","")]
     if not perf: return ""
-    h=['<h2>5 · HPA configuration (per perf namespace)</h2>']
-    # findings: any HPA at/near max (current==max) = maxed out; txn drift note
+    # after-load replica counts
+    arows={}
+    if after:
+        for r in read_csv(os.path.join(after,"hpa_state.csv")):
+            arows[(r["namespace"],r["hpa"])]=r
+    # peak replicas during load from hpa_scaling.csv
+    peak={}
+    if infra:
+        for r in read_csv(os.path.join(infra,"hpa_scaling.csv")):
+            peak[r["hpa"]]=r
+    h=['<h2>5 · HPA configuration</h2>']
     findings=[]
     for r in perf:
         try:
             cur=int(r["current"] or 0); mx=int(r["max"] or 0)
             if mx>0 and cur>=mx:
-                findings.append(li(f'{r["namespace"]}/{r["hpa"]}: at max replicas ({cur}/{mx}) — cannot scale further.',"warn"))
+                findings.append(li(f'{r["namespace"]} / {r["hpa"]}: at max replicas ({cur}/{mx}) — cannot scale further.',"warn"))
         except: pass
-        if "txn-transactionservice" in r.get("hpa",""):
-            findings.append(li(f'{r["namespace"]}/{r["hpa"]}: live max={r["max"]} (repo defines max=15 — drift if different).',
-                               "bad" if r.get("max")!="15" else ""))
     if findings:
         h.append('<ul class="findings">'+"".join(findings)+'</ul>')
-    # table
-    h.append('<table><tr><th>Namespace</th><th>HPA</th><th>Min</th><th>Max</th><th>Current</th></tr>')
+    h.append('<div class="tbl-wrap"><table><tr><th>Namespace</th><th>HPA</th><th>Min</th><th>Max</th>'
+             '<th>Replicas before</th><th>Peak during load</th><th>Replicas after</th></tr>')
     for r in sorted(perf,key=lambda x:(x["namespace"],x["hpa"])):
+        key=(r["namespace"],r["hpa"])
+        bef=r.get("current","–")
+        aft=arows.get(key,{}).get("current","–")
+        pk=peak.get(r["hpa"],{}).get("peak_replicas","–")
+        # highlight if it scaled up during load
+        pkcell=pk
+        try:
+            if int(pk)>int(bef): pkcell=f'<b style="color:var(--warn)">{pk}</b>'
+        except: pass
         h.append(f'<tr><td>{r["namespace"]}</td><td>{r["hpa"]}</td><td>{r["min"]}</td>'
-                 f'<td>{r["max"]}</td><td>{r.get("current","–")}</td></tr>')
-    h.append('</table>')
+                 f'<td>{r["max"]}</td><td>{bef}</td><td>{pkcell}</td><td>{aft}</td></tr>')
+    h.append('</table></div>')
+    h.append('<p class="muted">Replicas before → peak during load → after. Peak comes from per-sample HPA capture during the run.</p>')
     return "".join(h)
 
 
@@ -248,7 +307,7 @@ def section_alloc(before):
     h.append('<p class="muted">Per-service pod request &amp; limit, then multiplied by current and max HPA replicas '
              'to show total provisioned CPU/memory. Bottom row = fleet total.</p>')
     # CPU table
-    h.append('<h3 style="margin-top:14px">CPU (millicores)</h3>')
+    h.append('<h3 style="margin-top:14px">CPU</h3>')
     h.append('<table><tr><th>Service</th><th>Req/pod</th><th>Lim/pod</th><th>Repl (cur/max)</th>'
              '<th>Req\u00d7cur</th><th>Lim\u00d7cur</th><th>Req\u00d7max</th><th>Lim\u00d7max</th></tr>')
     for r in rows:
@@ -259,7 +318,7 @@ def section_alloc(before):
                  f'<td>{fmt_cpu(r["cpu_req_cur_m"])}</td><td>{fmt_cpu(r["cpu_lim_cur_m"])}</td><td>{fmt_cpu(r["cpu_req_max_m"])}</td><td>{fmt_cpu(r["cpu_lim_max_m"])}</td></tr>')
     h.append('</table>')
     # Memory table
-    h.append('<h3 style="margin-top:14px">Memory (Mi)</h3>')
+    h.append('<h3 style="margin-top:14px">Memory</h3>')
     h.append('<table><tr><th>Service</th><th>Req/pod</th><th>Lim/pod</th><th>Repl (cur/max)</th>'
              '<th>Req\u00d7cur</th><th>Lim\u00d7cur</th><th>Req\u00d7max</th><th>Lim\u00d7max</th></tr>')
     for r in rows:
@@ -281,6 +340,131 @@ def section_alloc(before):
         except: pass
     return "".join(h)
 
+
+def section_utilization(infra):
+    rows=read_csv(os.path.join(infra,"utilization_summary.csv")) if infra else []
+    if not rows: return ""
+    h=['<h2>2b · Actual resource utilization during load</h2>']
+    h.append('<p class="muted">Real CPU/memory used (not provisioned) across the full load window — average, and peak with the IST timestamp it occurred.</p>')
+    h.append('<div class="tbl-wrap"><table><tr><th>Service</th><th>CPU avg</th><th>CPU peak</th><th>CPU peak time</th><th>Mem avg</th><th>Mem peak</th><th>Mem peak time</th></tr>')
+    for r in sorted(rows,key=lambda x:-float(x.get("cpu_peak_m") or 0)):
+        h.append(f'<tr><td>{r["service"]}</td><td>{fmt_cpu(r["cpu_avg_m"])}</td><td>{fmt_cpu(r["cpu_peak_m"])}</td>'
+                 f'<td class="muted">{r["cpu_peak_ts"]}</td><td>{fmt_mem(r["mem_avg_mi"])}</td><td>{fmt_mem(r["mem_peak_mi"])}</td>'
+                 f'<td class="muted">{r["mem_peak_ts"]}</td></tr>')
+    h.append('</table></div>')
+    return "".join(h)
+
+def section_load_alloc(infra, before):
+    # actual usage (peak/avg) alongside provisioned request — the window below allocation
+    util={r["service"]:r for r in read_csv(os.path.join(infra,"utilization_summary.csv"))} if infra else {}
+    alloc=read_csv(os.path.join(before,"resource_alloc.csv")) if before else []
+    if not util or not alloc: return ""
+    h=['<h3>Provisioned vs actually used (during load)</h3>']
+    h.append('<p class="muted">How much of each service\'s CPU request was actually used at peak — shows over/under-provisioning.</p>')
+    h.append('<div class="tbl-wrap"><table><tr><th>Service</th><th>CPU req/pod</th><th>CPU peak used (total)</th><th>CPU avg used (total)</th><th>Mem peak used (total)</th></tr>')
+    for a in alloc:
+        svc=a["service"]
+        if svc=="TOTAL": continue
+        u=util.get(svc)
+        if not u: continue
+        h.append(f'<tr><td>{svc}</td><td>{fmt_cpu(a["cpu_req_m"])}</td><td>{fmt_cpu(u["cpu_peak_m"])}</td>'
+                 f'<td>{fmt_cpu(u["cpu_avg_m"])}</td><td>{fmt_mem(u["mem_peak_mi"])}</td></tr>')
+    h.append('</table></div>')
+    return "".join(h)
+
+def section_restarts(infra):
+    rows=read_csv(os.path.join(infra,"restart_summary.csv")) if infra else []
+    if not rows: return ""
+    h=['<h2>7 · Pod restarts &amp; reasons</h2>']
+    h.append('<ul class="findings">')
+    for r in rows[:6]:
+        cls="bad" if r["reason"] in ("OOMKilled","Error") else "warn"
+        h.append(f'<li class="{cls}">{r["pod"]} — {r["restarts"]} restart(s), reason: <b>{r["reason"]}</b> (exit {r["exit_code"]}) — {r["interpretation"]}</li>')
+    h.append('</ul>')
+    return "".join(h)
+
+def section_distribution(infra):
+    rows=read_csv(os.path.join(infra,"node_distribution.csv")) if infra else []
+    if not rows: return ""
+    nsrows=read_csv(os.path.join(infra,"node_distribution_ns.csv")) if infra else []
+    h=['<h2>8 · Pod distribution across nodes</h2>']
+    h.append('<p class="muted">App pods on each of the 12 app-worker nodes (7 workers + 5 gemfire), broken down by namespace — before load, at peak, and after. Node name is merged across its namespace rows (like a spreadsheet).</p>')
+    # group namespace rows by node
+    from collections import OrderedDict
+    bynode=OrderedDict()
+    for r in nsrows:
+        bynode.setdefault(r["node"],[]).append(r)
+    # node totals lookup
+    tot={r["node"]:r for r in rows}
+    # order nodes: workers first (1-7), then gemfire (1-5)
+    def _nodekey(n):
+        import re
+        m=re.match(r'(worker|gemfirecache)(\d+)',n)
+        if m: return (0 if m.group(1)=="worker" else 1, int(m.group(2)))
+        return (2,0)
+    ordered=sorted(bynode.keys(),key=_nodekey)
+    h.append('<div class="tbl-wrap"><table><tr><th>Node</th><th>Namespace</th><th>Pods before</th><th>Pods peak</th><th>Pods after</th></tr>')
+    for node in ordered:
+        items=sorted(bynode[node],key=lambda x:x["namespace"])
+        span=len(items)+1  # +1 for the node total row
+        t=tot.get(node,{})
+        first=True
+        for r in items:
+            if first:
+                h.append(f'<tr><td rowspan="{span}" style="vertical-align:middle;font-weight:600;background:var(--band)">{node}</td>'
+                         f'<td>{r["namespace"]}</td><td>{r["pods_before"]}</td><td>{r["pods_peak"]}</td><td>{r["pods_after"]}</td></tr>')
+                first=False
+            else:
+                h.append(f'<tr><td>{r["namespace"]}</td><td>{r["pods_before"]}</td><td>{r["pods_peak"]}</td><td>{r["pods_after"]}</td></tr>')
+        # node total row
+        h.append(f'<tr style="border-top:2px solid var(--accent)"><td style="font-weight:600">TOTAL</td>'
+                 f'<td style="font-weight:600">{t.get("pods_before","–")}</td>'
+                 f'<td style="font-weight:600">{t.get("pods_peak","–")}</td>'
+                 f'<td style="font-weight:600">{t.get("pods_after","–")}</td></tr>')
+    h.append('</table></div>')
+    return "".join(h)
+
+def section_spinup(infra):
+    rows=read_csv(os.path.join(infra,"spinup_summary.csv")) if infra else []
+    if not rows: return ""
+    h=['<h2>9 · Pod spin-up time (per namespace)</h2>']
+    h.append('<p class="muted">How long pods took from created → ready during the run, by namespace/service. Slow spin-up delays HPA response under load.</p>')
+    h.append('<div class="tbl-wrap"><table><tr><th>Namespace</th><th>Service</th><th>Pods</th><th>Avg spin-up</th><th>Max spin-up</th></tr>')
+    for r in rows:
+        h.append(f'<tr><td>{r.get("namespace","")}</td><td>{r["service"]}</td><td>{r["pods"]}</td>'
+                 f'<td>{r["spinup_avg_s"]}s</td><td>{r["spinup_max_s"]}s</td></tr>')
+    h.append('</table></div>')
+    return "".join(h)
+
+def section_hpa_scaling(infra):
+    rows=read_csv(os.path.join(infra,"hpa_scaling.csv")) if infra else []
+    if not rows: return ""
+    h=['<h3>HPA scaling during load</h3>']
+    h.append('<div class="tbl-wrap"><table><tr><th>HPA</th><th>Start</th><th>Peak</th><th>Max</th><th>Hit max?</th></tr>')
+    for r in rows:
+        if r.get("scaled_up")!="YES" and r.get("hit_max")!="YES": continue
+        hitcls=' style="color:var(--bad);font-weight:600"' if r["hit_max"]=="YES" else ''
+        h.append(f'<tr><td>{r["hpa"]}</td><td>{r["start_replicas"]}</td><td>{r["peak_replicas"]}</td>'
+                 f'<td>{r["max_replicas"]}</td><td{hitcls}>{r["hit_max"]}</td></tr>')
+    h.append('</table></div>')
+    return "".join(h)
+
+def section_app_pods(app):
+    rows=read_csv(os.path.join(app,"pod_signal_detail.csv")) if app else []
+    if not rows: return ""
+    rows=sorted(rows,key=lambda x:-int(x.get("total") or 0))
+    n=len(rows)
+    h=['<details><summary>Pods with log signals — click to expand ('+str(n)+' pods)</summary>']
+    h.append('<div class="tbl-wrap"><table><tr><th>Namespace</th><th>Pod</th><th>Errors</th><th>Exceptions</th><th>Conn-pool</th><th>503</th><th>Total</th></tr>')
+    for r in rows:
+        pod=r["pod"]
+        h.append(f'<tr><td>{r["namespace"]}</td><td class="pod-mono">{pod}'
+                 f'<button class="copybtn" onclick="copyPod(\'{pod}\')">copy</button></td>'
+                 f'<td>{r["errors"]}</td><td>{r["exceptions"]}</td><td>{r["conn_pool"]}</td><td>{r["http503"]}</td>'
+                 f'<td><b>{r["total"]}</b></td></tr>')
+    h.append('</table></div></details>')
+    return "".join(h)
+
 def build_verdict(before, after, infra, app):
     bits=[]; cls="good"
     inf=read_lines(os.path.join(infra,"findings.txt")) if infra else []
@@ -300,22 +484,39 @@ def build(a):
     _ist=_utc+datetime.timedelta(hours=5,minutes=30)
     now=_ist.strftime("%Y-%m-%d %H:%M IST")+" / "+_utc.strftime("%H:%M UTC")
     man=read_kv(os.path.join(a.before,"manifest.txt")) if a.before else {}
+    # load window (IST) from infra window.txt
+    win=read_kv(os.path.join(a.infra,"window.txt")) if a.infra else {}
+    loadwin=""
+    if win.get("start") and win.get("end"):
+        loadwin=f'<div class="sub" style="margin-top:4px">Load window: {_fmt_ts(win["start"])} → {_fmt_ts(win["end"])} ({win.get("samples","?")} samples)</div>'
     vcls,vtext=build_verdict(a.before,a.after,a.infra,a.app)
-    H=['<!doctype html><html><head><meta charset="utf-8"><title>PERF Report</title>',CSS,'</head><body><div class="wrap">']
+    H=['<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>PERF Report</title>',CSS,'</head><body><div class="wrap">']
     H.append('<div class="masthead"><h1>SBI ePay 2.0 — PERF Test Report</h1>'
              f'<div class="sub">Prepared by Saadi M Muzzammil · generated {now}</div>'
+             f'{loadwin}'
              '<div class="sub" style="margin-top:8px">'
-             '<a href="https://oneviewuat.sbi/" style="color:#cfe3ff;margin-right:16px">Dynatrace ↗</a>'
-             '<a href="https://console-openshift-console.apps.preprod.epay.sbi/" style="color:#cfe3ff;margin-right:16px">OCP Console ↗</a>'
-             '<a href="http://10.177.139.68:3000/" style="color:#cfe3ff">Grafana ↗</a>'
+             '<a href="https://oneviewuat.sbi/" target="_blank" rel="noopener" style="color:#cfe3ff;margin-right:16px">Dynatrace ↗</a>'
+             '<a href="https://console-openshift-console.apps.preprod.epay.sbi/" target="_blank" rel="noopener" style="color:#cfe3ff;margin-right:16px">OCP Console ↗</a>'
+             '<a href="http://10.177.139.68:3000/" target="_blank" rel="noopener" style="color:#cfe3ff">Grafana ↗</a>'
              '</div></div>')
+    H.append('<div class="nav"><a href="#s1">1 Changed</a><a href="#s2">2 During run</a>'
+             '<a href="#s2b">2b Utilization</a><a href="#s3">3 App logs</a><a href="#s4">4 Nodes</a>'
+             '<a href="#s5">5 HPA</a><a href="#s6">6 Allocation</a><a href="#s7">7 Restarts</a>'
+             '<a href="#s8">8 Distribution</a><a href="#s9">9 Spin-up</a></div>')
     H.append(f'<div class="verdict {vcls}"><b>Summary.</b> {vtext}</div>')
-    H.append(section_deltas(a.before,a.after))
-    H.append(section_trends(a.infra))
-    H.append(section_nodes(a.before,a.after,a.infra))
-    H.append(section_app(a.app))
-    H.append(section_hpa(a.before))
-    H.append(section_alloc(a.before))
+    H.append('<span id="s1"></span>'+section_deltas(a.before,a.after))
+    H.append('<span id="s2"></span>'+section_trends(a.infra))
+    H.append('<span id="s2b"></span>'+section_utilization(a.infra))
+    H.append('<span id="s3"></span>'+section_app(a.app))
+    H.append(section_app_pods(a.app))
+    H.append('<span id="s4"></span>'+section_nodes(a.before,a.after,a.infra))
+    H.append('<span id="s5"></span>'+section_hpa(a.before,a.after,a.infra))
+    H.append(section_hpa_scaling(a.infra))
+    H.append('<span id="s6"></span>'+section_alloc(a.before))
+    H.append(section_load_alloc(a.infra,a.before))
+    H.append('<span id="s7"></span>'+section_restarts(a.infra))
+    H.append('<span id="s8"></span>'+section_distribution(a.infra))
+    H.append('<span id="s9"></span>'+section_spinup(a.infra))
     H.append('<p class="muted" style="margin-top:40px;border-top:1px solid var(--line);padding-top:14px">'
              '© Saadi M Muzzammil · read-only · raw CSVs retained in each source zip.</p>')
     H.append('</div></body></html>')

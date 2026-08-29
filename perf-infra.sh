@@ -26,7 +26,7 @@ INTERVAL=60
 DURATION=3600
 OUTBASE="."
 SAMPLES=""
-NAMESPACES="perf-transaction perf-admin perf-kms perf-merchant perf-simulators perf-notification perf-epay-common perf-frontend"
+NAMESPACES="perf-transaction perf-admin perf-kms perf-merchant perf-simulators perf-notification perf-epay-common perf-frontend perf-istio-system perf-kafka perf-tempo"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -56,6 +56,11 @@ echo "[*] out: $OUTDIR"
 # rolling CSV headers
 echo "sample,ts,namespace,pod,cpu_m,mem_mi" > "$OUTDIR/pod_usage.csv"
 echo "sample,ts,namespace,pod,restarts,status" > "$OUTDIR/pod_status.csv"
+echo "sample,ts,namespace,pod,node,ip" > "$OUTDIR/pod_placement.csv"
+echo "sample,ts,namespace,pod,restart_count,reason,exit_code" > "$OUTDIR/restart_reasons.csv"
+echo "sample,ts,namespace,pod,phase,created,scheduled,ready,spinup_s" > "$OUTDIR/pod_spinup.csv"
+echo "sample,ts,namespace,pod,container,throttled_pct,throttled_periods,total_periods" > "$OUTDIR/pod_throttle.csv"
+echo "sample,ts,namespace,hpa,min,max,current,desired,target_metric" > "$OUTDIR/hpa_timeline.csv"
 echo "sample,ts,namespace,reason,count" > "$OUTDIR/scheduler_events.csv"
 echo "sample,ts,namespace,pod,probe,failures" > "$OUTDIR/probe_failures.csv"
 echo "sample,ts,node,cpu_m,cpu_pct,mem_mi,mem_pct" > "$OUTDIR/node_usage.csv"
@@ -79,6 +84,25 @@ while [ "$i" -lt "$SAMPLES" ]; do
     echo "$i,$now,$nname,$(echo "$ncpu"|sed 's/m//'),$(echo "$ncpupct"|sed 's/%//'),$(echo "$nmem"|sed 's/Mi//'),$(echo "$nmempct"|sed 's/%//')" >> "$OUTDIR/node_usage.csv"
   done < "$sdir/top_nodes.txt"
 
+  # --- HPA timeline: replica counts per perf HPA each sample ---
+  oc get hpa -A -o json 2>/dev/null > "$sdir/hpa.json"
+  if [ -s "$sdir/hpa.json" ]; then
+    python3 - "$sdir/hpa.json" "$i" "$now" >> "$OUTDIR/hpa_timeline.csv" 2>/dev/null <<'PYHPA'
+import json,sys
+f,samp,ts=sys.argv[1:4]
+try: data=json.load(open(f))
+except: sys.exit()
+for h in data.get("items",[]):
+    ns=h["metadata"]["namespace"]
+    if not ns.startswith("perf-"): continue
+    nm=h["metadata"]["name"]; sp=h.get("spec",{}); st=h.get("status",{})
+    tm=""
+    try: tm=str(st.get("currentMetrics",[{}])[0].get("resource",{}).get("current",{}).get("averageUtilization",""))
+    except: pass
+    print(f"{samp},{ts},{ns},{nm},{sp.get('minReplicas','')},{sp.get('maxReplicas','')},{st.get('currentReplicas','')},{st.get('desiredReplicas','')},{tm}")
+PYHPA
+  fi
+
   for ns in $NAMESPACES; do
     # --- CPU/mem via adm top ---
     oc -n "$ns" adm top pods --no-headers 2>/dev/null > "$sdir/top_${ns}.txt"
@@ -89,15 +113,57 @@ while [ "$i" -lt "$SAMPLES" ]; do
       echo "$i,$now,$ns,$pod,$cpu_m,$mem_mi" >> "$OUTDIR/pod_usage.csv"
     done < "$sdir/top_${ns}.txt"
 
-    # --- status + restarts ---
-    oc -n "$ns" get pods --no-headers 2>/dev/null > "$sdir/pods_${ns}.txt"
-    while read -r pod ready status restarts age; do
+    # --- status + restarts (wide = includes NODE + IP for placement/network) ---
+    oc -n "$ns" get pods -o wide --no-headers 2>/dev/null > "$sdir/pods_${ns}.txt"
+    while read -r pod ready status restarts age ip node _rest; do
       [ -z "$pod" ] && continue
       rc=$(echo "$restarts" | grep -oE '^[0-9]+' | head -1)
       echo "$i,$now,$ns,$pod,${rc:-0},$status" >> "$OUTDIR/pod_status.csv"
+      # placement + network: pod -> node, ip (for distribution + traceability)
+      echo "$i,$now,$ns,$pod,${node:-?},${ip:-?}" >> "$OUTDIR/pod_placement.csv"
     done < "$sdir/pods_${ns}.txt"
 
-    # --- scheduler events (this cycle) split by reason ---
+    # --- deep pod details via JSON: restart reasons (OOM/exit), spin-up timings ---
+    oc -n "$ns" get pods -o json 2>/dev/null > "$sdir/podsjson_${ns}.json"
+    if [ -s "$sdir/podsjson_${ns}.json" ]; then
+      python3 - "$sdir/podsjson_${ns}.json" "$i" "$now" "$ns" >> "$OUTDIR/restart_reasons.csv" 2>/dev/null <<'PYJSON'
+import json,sys,datetime
+f,samp,ts,ns=sys.argv[1:5]
+try: data=json.load(open(f))
+except: sys.exit()
+for p in data.get("items",[]):
+    nm=p["metadata"]["name"]
+    for cs in p.get("status",{}).get("containerStatuses",[]):
+        rc=cs.get("restartCount",0)
+        if rc>0:
+            last=cs.get("lastState",{}).get("terminated",{})
+            reason=last.get("reason",""); ec=last.get("exitCode","")
+            if reason or ec!="":
+                print(f"{samp},{ts},{ns},{nm},{rc},{reason},{ec}")
+PYJSON
+      python3 - "$sdir/podsjson_${ns}.json" "$i" "$now" "$ns" >> "$OUTDIR/pod_spinup.csv" 2>/dev/null <<'PYJSON'
+import json,sys,datetime
+f,samp,ts,ns=sys.argv[1:5]
+def parse(t):
+    try: return datetime.datetime.strptime(t,"%Y-%m-%dT%H:%M:%SZ")
+    except: return None
+try: data=json.load(open(f))
+except: sys.exit()
+for p in data.get("items",[]):
+    nm=p["metadata"]["name"]; st=p.get("status",{})
+    phase=st.get("phase","")
+    created=p["metadata"].get("creationTimestamp","")
+    sched=ready=""
+    for c in st.get("conditions",[]):
+        if c["type"]=="PodScheduled": sched=c.get("lastTransitionTime","")
+        if c["type"]=="Ready": ready=c.get("lastTransitionTime","")
+    cd=parse(created); rd=parse(ready)
+    spin=(rd-cd).total_seconds() if cd and rd else ""
+    print(f"{samp},{ts},{ns},{nm},{phase},{created},{sched},{ready},{spin}")
+PYJSON
+    fi
+
+
     oc -n "$ns" get events --field-selector reason=FailedScheduling --no-headers 2>/dev/null > "$sdir/sched_${ns}.txt"
     if [ -s "$sdir/sched_${ns}.txt" ]; then
       # bucket by the reason substring

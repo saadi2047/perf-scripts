@@ -23,7 +23,7 @@ INTERVAL=60
 DURATION=3600
 OUTBASE="."
 SAMPLES=""
-NAMESPACES="perf-transaction perf-admin perf-kms perf-merchant perf-simulators perf-notification perf-epay-common perf-frontend"
+NAMESPACES="perf-transaction perf-admin perf-kms perf-merchant perf-simulators perf-notification perf-epay-common perf-frontend perf-istio-system perf-kafka perf-tempo"
 # grep pattern for signal lines (case-insensitive)
 PATTERN='ERROR|WARN|Exception|Caused by|\tat |FATAL|OutOfMemory|GC pause|Pause Young|Pause Full|Full GC|503|Service Unavailable|connection is not available|Connection is not available|HikariPool|timeout|Timeout|refused|Unable to acquire|deadlock'
 

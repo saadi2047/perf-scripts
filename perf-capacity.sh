@@ -19,7 +19,7 @@ set -u
 
 PHASE="snapshot"
 OUTBASE="."
-NAMESPACES="perf-transaction perf-admin perf-kms perf-merchant perf-simulators perf-notification perf-epay-common"
+NAMESPACES="perf-transaction perf-admin perf-kms perf-merchant perf-simulators perf-notification perf-epay-common perf-frontend perf-istio-system perf-kafka perf-tempo"
 
 while [ $# -gt 0 ]; do
   case "$1" in

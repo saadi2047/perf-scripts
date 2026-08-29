@@ -165,3 +165,165 @@ if tss:
 print(f"[infra] {len(services)} services, {nsamp} samples")
 print(f"[infra] {len(findings)} findings written")
 for x in findings[:6]: print("   -", x)
+
+
+# ============================================================================
+# EXTENDED CAPTURES (v2): utilization avg/peak+timestamp, restart reasons,
+# spin-up, node distribution, HPA timeline. Appended outputs for the report.
+# ============================================================================
+import csv as _csv, os as _os
+from collections import defaultdict as _dd
+
+_out = outdir
+
+def _ts_short(iso):
+    try:
+        import datetime
+        d=datetime.datetime.strptime(iso,"%Y-%m-%dT%H:%M:%SZ")
+        ist=d+datetime.timedelta(hours=5,minutes=30)
+        return ist.strftime("%H:%M:%S IST")
+    except: return iso
+
+# ---- 1. Per-service utilization: avg + peak(with timestamp) over the whole run ----
+usage_rows=[]
+pu=_os.path.join(_out,"pod_usage.csv")
+if _os.path.exists(pu):
+    for r in _csv.DictReader(open(pu)):
+        usage_rows.append(r)
+
+def _svc(pod):
+    parts=pod.split("-"); core=parts[:-2] if len(parts)>=3 else parts
+    for t in core:
+        if "service" in t.lower(): return t
+    return core[1] if len(core)>1 else pod
+
+# aggregate per service per sample (sum across pods), then avg/peak across samples
+svc_sample_cpu=_dd(lambda:_dd(float))
+svc_sample_mem=_dd(lambda:_dd(float))
+sample_ts={}
+for r in usage_rows:
+    try:
+        s=int(r["sample"]); cpu=float(r["cpu_m"] or 0); mem=float(r["mem_mi"] or 0)
+    except: continue
+    svc=_svc(r["pod"]); svc_sample_cpu[svc][s]+=cpu; svc_sample_mem[svc][s]+=mem
+    sample_ts[s]=r["ts"]
+
+with open(_os.path.join(_out,"utilization_summary.csv"),"w") as f:
+    f.write("service,cpu_avg_m,cpu_peak_m,cpu_peak_ts,mem_avg_mi,mem_peak_mi,mem_peak_ts\n")
+    for svc in sorted(svc_sample_cpu):
+        cser=svc_sample_cpu[svc]; mser=svc_sample_mem[svc]
+        cavg=sum(cser.values())/len(cser) if cser else 0
+        cpk_s=max(cser,key=cser.get) if cser else 0; cpk=cser.get(cpk_s,0)
+        mavg=sum(mser.values())/len(mser) if mser else 0
+        mpk_s=max(mser,key=mser.get) if mser else 0; mpk=mser.get(mpk_s,0)
+        f.write(f"{svc},{cavg:.0f},{cpk:.0f},{_ts_short(sample_ts.get(cpk_s,''))},{mavg:.0f},{mpk:.0f},{_ts_short(sample_ts.get(mpk_s,''))}\n")
+
+# ---- 2. Restart reasons (dedup to worst per pod) ----
+rr=_os.path.join(_out,"restart_reasons.csv")
+if _os.path.exists(rr):
+    worst={}
+    for r in _csv.DictReader(open(rr)):
+        k=(r["namespace"],r["pod"])
+        try: rc=int(r["restart_count"])
+        except: rc=0
+        if k not in worst or rc>worst[k][0]:
+            worst[k]=(rc,r.get("reason",""),r.get("exit_code",""))
+    with open(_os.path.join(_out,"restart_summary.csv"),"w") as f:
+        f.write("namespace,pod,restarts,reason,exit_code,interpretation\n")
+        for (ns,pod),(rc,reason,ec) in sorted(worst.items(),key=lambda x:-x[1][0]):
+            interp=""
+            if str(ec)=="143": interp="SIGTERM (liveness probe kill or graceful stop)"
+            elif str(ec)=="137": interp="SIGKILL (OOMKilled or forced)"
+            elif reason=="OOMKilled": interp="Out of memory"
+            elif reason=="Error": interp="Container error/crash"
+            f.write(f"{ns},{pod},{rc},{reason},{ec},{interp}\n")
+
+# ---- 3. Spin-up times (avg per service) ----
+sp=_os.path.join(_out,"pod_spinup.csv")
+if _os.path.exists(sp):
+    svc_spin=_dd(list)
+    svc_ns={}
+    seen=set()
+    for r in _csv.DictReader(open(sp)):
+        key=(r["namespace"],r["pod"])
+        if key in seen: continue
+        try:
+            s=float(r["spinup_s"])
+            if s>0:
+                svc=_svc(r["pod"]); svc_spin[svc].append(s); svc_ns[svc]=r["namespace"]; seen.add(key)
+        except: pass
+    with open(_os.path.join(_out,"spinup_summary.csv"),"w") as f:
+        f.write("namespace,service,pods,spinup_avg_s,spinup_max_s\n")
+        for svc in sorted(svc_spin,key=lambda x:svc_ns.get(x,"")):
+            v=svc_spin[svc]
+            f.write(f"{svc_ns.get(svc,'')},{svc},{len(v)},{sum(v)/len(v):.1f},{max(v):.1f}\n")
+
+# ---- 4. Node distribution: per-node, per-namespace, per-sample counts ----
+# Produces node_distribution.csv with first(before)/peak/last(after) counts,
+# broken down by namespace. Peak = the sample with the most total app pods.
+pp=_os.path.join(_out,"pod_placement.csv")
+if _os.path.exists(pp):
+    # sample -> node -> ns -> count
+    snc=_dd(lambda:_dd(lambda:_dd(int)))
+    # sample -> total app pods (to find the peak sample)
+    sample_total=_dd(int)
+    samples=set()
+    for r in _csv.DictReader(open(pp)):
+        try: s=int(r["sample"])
+        except: continue
+        node=r["node"]; ns=r.get("namespace","")
+        if node and node!="?" and ("worker" in node or "gemfire" in node):
+            snc[s][node.split('.')[0]][ns]+=1
+            sample_total[s]+=1
+            samples.add(s)
+    if samples:
+        first_s=min(samples); last_s=max(samples)
+        peak_s=max(sample_total,key=sample_total.get)
+        # all nodes seen
+        allnodes=set()
+        for s in snc:
+            allnodes.update(snc[s].keys())
+        # all namespaces seen (short)
+        def _shortns(n): return n.replace("perf-","")
+        allns=set()
+        for s in snc:
+            for nd in snc[s]:
+                allns.update(snc[s][nd].keys())
+        allns=sorted(allns)
+        # node-level before/peak/after totals + per-ns peak breakdown
+        with open(_os.path.join(_out,"node_distribution.csv"),"w") as f:
+            f.write("node,pods_before,pods_peak,pods_after\n")
+            def _nodetotal(s,node): return sum(snc[s][node].values())
+            for node in sorted(allnodes,key=lambda n:_nodetotal(peak_s,n),reverse=True):
+                b=_nodetotal(first_s,node); p=_nodetotal(peak_s,node); a=_nodetotal(last_s,node)
+                f.write(f"{node},{b},{p},{a}\n")
+        # per-node per-namespace peak breakdown (long form for the report)
+        with open(_os.path.join(_out,"node_distribution_ns.csv"),"w") as f:
+            f.write("node,namespace,pods_before,pods_peak,pods_after\n")
+            for node in sorted(allnodes):
+                for ns in allns:
+                    b=snc[first_s][node].get(ns,0); p=snc[peak_s][node].get(ns,0); a=snc[last_s][node].get(ns,0)
+                    if b or p or a:
+                        f.write(f"{node},{_shortns(ns)},{b},{p},{a}\n")
+        # record which samples were used
+        with open(_os.path.join(_out,"distribution_window.txt"),"w") as f:
+            f.write(f"before_sample={first_s}\npeak_sample={peak_s}\nafter_sample={last_s}\n")
+
+# ---- 5. HPA timeline (scaling events: when did each service change replicas) ----
+ht=_os.path.join(_out,"hpa_timeline.csv")
+if _os.path.exists(ht):
+    svc_scaling=_dd(list)
+    for r in _csv.DictReader(open(ht)):
+        try: cur=int(r["current"] or 0)
+        except: continue
+        svc_scaling[r["hpa"]].append((int(r["sample"]),cur,r["ts"],r["max"]))
+    with open(_os.path.join(_out,"hpa_scaling.csv"),"w") as f:
+        f.write("hpa,start_replicas,peak_replicas,max_replicas,scaled_up,hit_max\n")
+        for hpa,pts in sorted(svc_scaling.items()):
+            reps=[c for _,c,_,_ in pts]
+            mx=pts[0][3]
+            start=reps[0]; peak=max(reps)
+            hit="YES" if str(peak)==str(mx) else "no"
+            f.write(f"{hpa},{start},{peak},{mx},{'YES' if peak>start else 'no'},{hit}\n")
+
+print(f"[infra-v2] extended captures written: utilization, restarts, spinup, distribution, hpa-scaling")

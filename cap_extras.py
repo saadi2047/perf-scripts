@@ -41,7 +41,7 @@ with open(os.path.join(outdir, "pending_pods.csv"), "w") as f:
         f.write(f"{ns},{pod}\n")
 
 print(f"[extras] HPA rows: {len(hpa_rows)}, Pending pods: {len(pending)}")
-# flag any txn HPA drift (repo says max 15; live may be 30)
+# report the core transaction-service HPA in the perf namespace (not frontend/pre-prod look-alikes)
 for h in hpa_rows:
-    if "transaction" in h["name"].lower():
-        print(f"[extras] TXN HPA live: min={h['min']} max={h['max']} current={h['current']}  (repo says max=15 — flag if different)")
+    if h["name"] == "txn-transactionservice-hpa" and h["ns"] == "perf-transaction":
+        print(f"[extras] txn-transactionservice HPA (perf): min={h['min']} max={h['max']} current={h['current']}")

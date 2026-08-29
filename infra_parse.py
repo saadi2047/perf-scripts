@@ -249,7 +249,9 @@ if _os.path.exists(sp):
         if key in seen: continue
         try:
             s=float(r["spinup_s"])
-            if s>0:
+            # only count genuine spin-ups: pods that started during the test (<1hr).
+            # larger values = pods already running before the test (age, not spin-up).
+            if 0 < s <= 3600:
                 svc=_svc(r["pod"]); svc_spin[svc].append(s); svc_ns[svc]=r["namespace"]; seen.add(key)
         except: pass
     with open(_os.path.join(_out,"spinup_summary.csv"),"w") as f:

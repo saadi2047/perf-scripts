@@ -44,8 +44,17 @@ def classify(labels, taints):
     if "node-role.kubernetes.io/worker" in labels: return "app-worker"
     return "other"
 
-with open(os.path.join(raw, "nodes.json")) as f:
-    nodes = json.load(f)["items"]
+_nodes_path = os.path.join(raw, "nodes.json")
+if not os.path.exists(_nodes_path) or os.path.getsize(_nodes_path) == 0:
+    print(f"    [parser] WARN: {_nodes_path} missing or empty — capacity parsing skipped "
+          f"(oc get nodes returned nothing). Re-run this phase for capacity data.")
+    sys.exit(0)
+try:
+    with open(_nodes_path) as f:
+        nodes = json.load(f)["items"]
+except Exception as e:
+    print(f"    [parser] WARN: could not read nodes.json ({e}) — capacity parsing skipped.")
+    sys.exit(0)
 
 rows = []
 for n in nodes:

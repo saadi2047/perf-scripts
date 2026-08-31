@@ -9,7 +9,16 @@ def svc_of(pod):
     core = parts[:-2] if len(parts) >= 3 else parts
     for tok in core:
         if "service" in tok.lower(): return tok
-    return core[1] if len(core) > 1 else (core[0] if core else pod)
+    for tok in core:
+        tl=tok.lower()
+        if tl in ("perfsimulator","merchantsimulaterfe","javautilityapisimulator","stubsservice",
+                  "reportservice","transactionfe","merchantfe","kafka","tempo","istiod","zookeeper"):
+            return tok
+    skip={"perf","tempo","app","the"}
+    for tok in core:
+        if tok.lower() not in skip:
+            return tok
+    return core[-1] if core else pod
 
 tot = defaultdict(lambda: defaultdict(int))  # svc -> severity -> count
 pods = defaultdict(lambda: defaultdict(set))  # svc -> severity -> {pod names}

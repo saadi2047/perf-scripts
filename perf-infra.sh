@@ -59,7 +59,6 @@ echo "sample,ts,namespace,pod,restarts,status" > "$OUTDIR/pod_status.csv"
 echo "sample,ts,namespace,pod,node,ip" > "$OUTDIR/pod_placement.csv"
 echo "sample,ts,namespace,pod,restart_count,reason,exit_code" > "$OUTDIR/restart_reasons.csv"
 echo "sample,ts,namespace,pod,phase,created,scheduled,ready,spinup_s" > "$OUTDIR/pod_spinup.csv"
-echo "sample,ts,namespace,pod,container,throttled_pct,throttled_periods,total_periods" > "$OUTDIR/pod_throttle.csv"
 echo "sample,ts,namespace,hpa,min,max,current,desired,target_metric" > "$OUTDIR/hpa_timeline.csv"
 echo "sample,ts,namespace,reason,count" > "$OUTDIR/scheduler_events.csv"
 echo "sample,ts,namespace,pod,probe,failures" > "$OUTDIR/probe_failures.csv"
@@ -164,6 +163,25 @@ PYJSON
     fi
 
 
+    # --- liveness/readiness probe failures (explains SIGTERM restarts) ---
+    oc -n "$ns" get events --field-selector reason=Unhealthy --no-headers 2>/dev/null > "$sdir/probe_${ns}.txt"
+    if [ -s "$sdir/probe_${ns}.txt" ]; then
+      # count per pod, split liveness vs readiness
+      awk -v s="$i" -v t="$now" -v n="$ns" '
+        { pod=""; probe="unknown";
+          for(f=1;f<=NF;f++){
+            if($f ~ /^pod\//){ pod=$f; sub(/^pod\//,"",pod) }
+            if($f ~ /[Ll]iveness/) probe="liveness";
+            else if($f ~ /[Rr]eadiness/ && probe=="unknown") probe="readiness";
+            else if($f ~ /[Ss]tartup/ && probe=="unknown") probe="startup";
+          }
+          if(pod!="") cnt[pod"|"probe]++
+        }
+        END { for(k in cnt){ split(k,a,"|"); print s","t","n","a[1]","a[2]","cnt[k] } }
+      ' "$sdir/probe_${ns}.txt" >> "$OUTDIR/probe_failures.csv"
+    fi
+
+    # --- scheduler events (this cycle) split by reason ---
     oc -n "$ns" get events --field-selector reason=FailedScheduling --no-headers 2>/dev/null > "$sdir/sched_${ns}.txt"
     if [ -s "$sdir/sched_${ns}.txt" ]; then
       # bucket by the reason substring

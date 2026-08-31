@@ -25,7 +25,16 @@ def svc_of(ns, pod):
     for tok in core:
         if "service" in tok.lower():
             return tok
-    return core[1] if len(core) > 1 else (core[0] if core else pod)
+    for tok in core:
+        tl=tok.lower()
+        if tl in ("perfsimulator","merchantsimulaterfe","javautilityapisimulator","stubsservice",
+                  "reportservice","transactionfe","merchantfe","kafka","tempo","istiod","zookeeper"):
+            return tok
+    skip={"perf","tempo","app","the"}
+    for tok in core:
+        if tok.lower() not in skip:
+            return tok
+    return core[-1] if core else pod
 
 # ---- load pod_usage ----
 usage = defaultdict(lambda: defaultdict(list))  # svc -> sample -> [(cpu,mem)]
@@ -193,9 +202,21 @@ if _os.path.exists(pu):
 
 def _svc(pod):
     parts=pod.split("-"); core=parts[:-2] if len(parts)>=3 else parts
+    # prefer an explicit *service token
     for t in core:
         if "service" in t.lower(): return t
-    return core[1] if len(core)>1 else pod
+    # known app/infra workload keywords (avoids grabbing generic "perf"/"tempo" prefix)
+    for t in core:
+        tl=t.lower()
+        if tl in ("perfsimulator","merchantsimulaterfe","javautilityapisimulator","stubsservice",
+                  "reportservice","transactionfe","merchantfe","kafka","tempo","istiod","zookeeper"):
+            return t
+    # fallback: skip a leading generic prefix like "perf" and take the next meaningful token
+    skip={"perf","tempo","app","the"}
+    for t in core:
+        if t.lower() not in skip:
+            return t
+    return core[-1] if core else pod
 
 # aggregate per service per sample (sum across pods), then avg/peak across samples
 svc_sample_cpu=_dd(lambda:_dd(float))
@@ -329,3 +350,25 @@ if _os.path.exists(ht):
             f.write(f"{hpa},{start},{peak},{mx},{'YES' if peak>start else 'no'},{hit}\n")
 
 print(f"[infra-v2] extended captures written: utilization, restarts, spinup, distribution, hpa-scaling")
+
+# ---- 6. Probe failures (liveness/readiness) — explains SIGTERM restarts ----
+pf=_os.path.join(_out,"probe_failures.csv")
+if _os.path.exists(pf):
+    agg=_dd(lambda:_dd(int))
+    ns_of={}
+    for r in _csv.DictReader(open(pf)):
+        pod=r.get("pod","")
+        if not pod: continue
+        try: c=int(r.get("failures",0) or 0)
+        except: c=0
+        agg[pod][r.get("probe","unknown")]=max(agg[pod][r.get("probe","unknown")],c)
+        ns_of[pod]=r.get("namespace","")
+    if agg:
+        with open(_os.path.join(_out,"probe_summary.csv"),"w") as f:
+            f.write("namespace,pod,liveness_failures,readiness_failures,startup_failures,total\n")
+            rows=[]
+            for pod,d in agg.items():
+                lv=d.get("liveness",0); rd=d.get("readiness",0); st=d.get("startup",0)
+                rows.append((ns_of.get(pod,""),pod,lv,rd,st,lv+rd+st))
+            for r in sorted(rows,key=lambda x:-x[5]):
+                f.write(f"{r[0]},{r[1]},{r[2]},{r[3]},{r[4]},{r[5]}\n")

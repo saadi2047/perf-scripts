@@ -18,10 +18,12 @@ def read_lines(p):
 
 
 def fmt_cpu(m):
-    """millicores -> human: 20000 -> '20 cores', 500 -> '500m'"""
+    """millicores -> human: 20000 -> '20 cores', 1000 -> '1 core', 500 -> '500m'"""
     try: m=float(m)
     except: return str(m)
-    if m>=1000: return f"{m/1000:.1f}".rstrip("0").rstrip(".")+" cores"
+    if m>=1000:
+        v=f"{m/1000:.1f}".rstrip("0").rstrip(".")
+        return v+(" core" if v=="1" else " cores")
     return f"{m:.0f}m"
 
 def fmt_mem(mi):
@@ -87,6 +89,24 @@ border:1px solid var(--line);border-radius:8px;padding:9px 14px;margin:12px 0 18
 .nav a:hover{color:var(--head)}
 @media(max-width:640px){.nav{overflow-x:auto;white-space:nowrap}h2{font-size:15px}.kpi .val{font-size:18px}}
 span[id]{scroll-margin-top:60px;display:block}
+
+.groupband{text-align:center;margin:44px 0 10px;position:relative;animation:fadeUp .5s ease both}
+.groupband h2.group{display:inline-block;font-size:19px;font-weight:700;color:#fff;
+background:linear-gradient(135deg,#16324a,#2563a8);padding:10px 30px;border-radius:30px;
+border:none;box-shadow:0 4px 14px rgba(37,99,168,.3);letter-spacing:.03em;margin:0}
+.groupband .gsub{display:block;color:var(--mut);font-size:12.5px;margin-top:8px;font-style:italic}
+h2{text-align:center;justify-content:center}
+.navbtns{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin:18px 0 8px}
+.navbtns a{display:inline-flex;align-items:center;justify-content:center;min-width:42px;height:38px;
+padding:0 14px;background:var(--card);border:1.5px solid var(--accent);border-radius:9px;
+color:var(--accent);text-decoration:none;font-size:13px;font-weight:600;
+transition:all .2s cubic-bezier(.2,.8,.3,1);box-shadow:0 2px 6px rgba(20,40,60,.08)}
+.navbtns a:hover{background:var(--accent);color:#fff;transform:translateY(-3px) scale(1.05);
+box-shadow:0 6px 16px rgba(37,99,168,.35)}
+.navbtns a:active{transform:translateY(-1px) scale(1.0)}
+@media(max-width:640px){.navbtns a{min-width:36px;height:34px;padding:0 10px;font-size:12px}
+.groupband h2.group{font-size:15px;padding:8px 18px}}
+
 </style>
 <script>
 function copyPod(t){navigator.clipboard.writeText(t).then(function(){
@@ -130,16 +150,43 @@ def section_deltas(before, after):
         rb,ra=float(ba.get("reserved_cores",0)),float(aa.get("reserved_cores",0))
         fb=float(ba.get("free_cores",0)); fa=float(aa.get("free_cores",0))
         d=ra-rb; arrow="up" if d>0 else ("dn" if d<0 else "flat")
-        direction="more" if d>0 else "less"
-        facts.append(f'<b>CPU booked by pods</b> (reserved) went from <b>{rb:.0f} cores</b> before to <b>{ra:.0f} cores</b> after — '
-                     f'<span class="delta {arrow}">{abs(d):.0f} cores {direction}</span> used by the load, out of 186 total.')
-        facts.append(f'<b>Free CPU left</b> for new pods dropped from <b>{fb:.0f} cores</b> to <span class="delta {"up" if fa<fb else "flat"}">{fa:.0f} cores</span> — '
-                     f'this is the headroom that remained at the end of the run.')
+        _alloc_total=float(ba.get("alloc_cores",0) or 0)
+        if abs(d) < 1.0:
+            chg=f'<span class="delta flat">essentially unchanged</span>'
+        elif d>0:
+            chg=f'<span class="delta up">{abs(d):.0f} cores more</span> booked by the load'
+        else:
+            chg=f'<span class="delta dn">{abs(d):.0f} cores released</span> by the end'
+        facts.append(f'<b>CPU booked by pods</b> (reserved) went from <b>{rb:.0f} cores</b> before to <b>{ra:.0f} cores</b> after — {chg}, '
+                     f'out of {_alloc_total:.0f} cores available on the 12 app-worker nodes.')
+        fd=fa-fb
+        if abs(fd) < 1.0:
+            fw=f'<span class="delta flat">held steady at {fa:.0f} cores</span>'
+        elif fd<0:
+            fw=f'<span class="delta up">fell from {fb:.0f} to {fa:.0f} cores</span>'
+        else:
+            fw=f'<span class="delta dn">rose from {fb:.0f} to {fa:.0f} cores</span>'
+        facts.append(f'<b>Free CPU left</b> for new pods {fw} — this is the headroom remaining at the end of the run.')
     except: pass
     # pending — plain
     pcls="up" if len(ap)>len(bp) else "flat"
-    facts.append(f'<b>Pods stuck waiting to schedule</b>: <span class="delta {pcls}">{len(bp)} before → {len(ap)} after</span>. '
-                 f'{"Some pods could not get a node — see below." if len(ap)>0 else "None — every pod found a node."}')
+    _INFRA_POD=("grafana","tempo","otel","collector","prometheus","loki","quay","operator",
+                "alertmanager","exporter","kafka","zookeeper","istio")
+    _appq=[p for p in ap if p.get("namespace","").startswith("perf-")
+           and not any(k in p.get("pod","").lower() for k in _INFRA_POD)]
+    def _names(lst,limit=3):
+        ns=[f'{p.get("namespace","")}/{p.get("pod","")}' for p in lst]
+        shown=", ".join(ns[:limit])
+        return shown+(f" +{len(ns)-limit} more" if len(ns)>limit else "")
+    if len(ap)==0:
+        _pnote="None — every pod found a node."
+    elif _appq:
+        _w="pod" if len(_appq)==1 else "pods"
+        _pnote=f'{len(_appq)} app-service {_w} could not get a node: <b>{_names(_appq)}</b>.'
+    else:
+        _pnote=(f'These are platform pods, not app services — {_names(ap)}. '
+                f'App-service pods all scheduled normally.')
+    facts.append(f'<b>Pods waiting to schedule</b>: <span class="delta {pcls}">{len(bp)} before → {len(ap)} after</span>. {_pnote}')
     def pending_detail(plist):
         if not plist: return ""
         items=[f'<li>{p.get("namespace","")} / {p.get("pod","")}</li>' for p in plist]
@@ -173,7 +220,7 @@ def _fmt_ts(iso):
 
 def section_trends(infra):
     win=read_kv(os.path.join(infra,"window.txt")) if infra else {}
-    hdr="2 · What happened during the run"
+    hdr="3 · What happened during the run"
     if win.get("start") and win.get("end"):
         hdr += f' <span style="font-size:12px;font-weight:400;color:var(--mut)">({_fmt_ts(win["start"])} → {_fmt_ts(win["end"])}, {win.get("samples","?")} samples)</span>'
     h=[f'<h2>{hdr}</h2>']
@@ -185,7 +232,7 @@ def section_trends(infra):
         h.append('<ul class="findings">'+"".join(li(f, classify_finding(f)) for f in finds)+'</ul>')
     if trends:
         h.append('<details><summary>Per-service CPU / memory / scaling (detail)</summary>'
-                 '<table><tr><th>Service</th><th>CPU peak</th><th>CPU settled</th><th>Mem peak (Mi)</th><th>Pods</th><th>Restarts</th></tr>')
+                 '<table><tr><th>Service</th><th>CPU peak</th><th>CPU settled</th><th>Mem peak</th><th>Pods</th><th>Restarts</th></tr>')
         for r in trends:
             h.append(f'<tr><td>{r["service"]}</td><td>{fmt_cpu(r["cpu_peak_m"])}</td><td>{fmt_cpu(r["cpu_settled_m"])}</td>'
                      f'<td>{fmt_mem(r["mem_peak_mi"])}</td><td>{r["pods_min"]}→{r["pods_max"]}</td><td>{r["restart_delta"]}</td></tr>')
@@ -196,7 +243,7 @@ def section_app(app):
     finds=read_lines(os.path.join(app,"findings.txt")) if app else []
     summ=read_csv(os.path.join(app,"log_summary.csv")) if app else []
     if not finds and not summ: return ""
-    h=['<h2>3 · Application log signals</h2>']
+    h=['<h2>9 · Application log signals</h2>']
     if finds:
         h.append('<ul class="findings">'+"".join(li(f, classify_finding(f)) for f in finds)+'</ul>')
     if summ:
@@ -217,7 +264,7 @@ def section_nodes(before, after, infra):
     # app-workers only (worker* and gemfire*)
     nodes=[n for n in nodes if "worker" in n or "gemfire" in n]
     if not nodes: return ""
-    h=['<h2>3 · Node utilization (app-worker nodes)</h2>']
+    h=['<h2>5 · Node utilization (app-worker nodes)</h2>']
     # findings: hottest node during load, and before vs after shift
     du_app={n:r for n,r in du.items() if "worker" in n or "gemfire" in n}
     if du_app:
@@ -255,7 +302,7 @@ def section_hpa(before, after=None, infra=None):
     if infra:
         for r in read_csv(os.path.join(infra,"hpa_scaling.csv")):
             peak[r["hpa"]]=r
-    h=['<h2>5 · HPA configuration</h2>']
+    h=['<h2>6 · HPA configuration</h2>']
     findings=[]
     for r in perf:
         try:
@@ -290,7 +337,7 @@ def section_alloc(before):
     # cluster app-worker capacity for context
     cls=read_csv(os.path.join(before,"capacity_by_class.csv")) if before else []
     appc=next((c for c in cls if c["class"]=="app-worker"), {})
-    h=['<h2>6 · Resource allocation (request / limit \u00d7 replicas)</h2>']
+    h=['<h2>2 · Resource allocation (request / limit \u00d7 replicas)</h2>']
     # warn if HPA replicas all defaulted to 1 (HPA capture failed)
     nonhdr=[r for r in rows if r["service"]!="TOTAL"]
     if nonhdr and all(r.get("replicas_cur")=="1" and r.get("replicas_max")=="1" for r in nonhdr):
@@ -334,8 +381,12 @@ def section_alloc(before):
         t=tr[0]
         try:
             crm=int(t["cpu_req_max_m"])/1000; mrm=float(t["mem_req_max_mi"])/1024
-            h.insert(2, li(f'At max replicas, services would reserve <b>{crm:.1f} CPU cores</b> and <b>{mrm:.0f} GB</b> memory (requests). App-worker pool = 186 cores.',
-                           "warn" if crm>186 else ""))
+            _pool=0.0
+            try: _pool=float(appc.get("alloc_cores",0) or 0)
+            except: _pool=0.0
+            _poolt=f"{_pool:.0f}" if _pool else "?"
+            h.insert(2, li(f'At max replicas, services would reserve <b>{crm:.1f} CPU cores</b> and <b>{mrm:.0f} GB</b> memory (requests). App-worker pool = {_poolt} cores.',
+                           "warn" if (_pool and crm>_pool) else ""))
             h.insert(2,'<ul class="findings">'); h.insert(4,'</ul>')
         except: pass
     return "".join(h)
@@ -344,14 +395,24 @@ def section_alloc(before):
 def section_utilization(infra):
     rows=read_csv(os.path.join(infra,"utilization_summary.csv")) if infra else []
     if not rows: return ""
-    h=['<h2>2b · Actual resource utilization during load</h2>']
+    def _is_infra(name):
+        n=(name or "").lower()
+        return any(x in n for x in ("kafka","istio","tempo","zookeeper","otel","generate-traces"))
+    app=[r for r in rows if not _is_infra(r["service"])]
+    inf=[r for r in rows if _is_infra(r["service"])]
+    h=['<h2>4 · Actual resource utilization during load</h2>']
     h.append('<p class="muted">Real CPU/memory used (not provisioned) across the full load window — average, and peak with the IST timestamp it occurred.</p>')
-    h.append('<div class="tbl-wrap"><table><tr><th>Service</th><th>CPU avg</th><th>CPU peak</th><th>CPU peak time</th><th>Mem avg</th><th>Mem peak</th><th>Mem peak time</th></tr>')
-    for r in sorted(rows,key=lambda x:-float(x.get("cpu_peak_m") or 0)):
-        h.append(f'<tr><td>{r["service"]}</td><td>{fmt_cpu(r["cpu_avg_m"])}</td><td>{fmt_cpu(r["cpu_peak_m"])}</td>'
-                 f'<td class="muted">{r["cpu_peak_ts"]}</td><td>{fmt_mem(r["mem_avg_mi"])}</td><td>{fmt_mem(r["mem_peak_mi"])}</td>'
-                 f'<td class="muted">{r["mem_peak_ts"]}</td></tr>')
-    h.append('</table></div>')
+    def _tbl(rws):
+        o=['<div class="tbl-wrap"><table><tr><th>Service</th><th>CPU avg</th><th>CPU peak</th><th>CPU peak time</th><th>Mem avg</th><th>Mem peak</th><th>Mem peak time</th></tr>']
+        for r in sorted(rws,key=lambda x:-float(x.get("cpu_peak_m") or 0)):
+            o.append(f'<tr><td>{r["service"]}</td><td>{fmt_cpu(r["cpu_avg_m"])}</td><td>{fmt_cpu(r["cpu_peak_m"])}</td>'
+                     f'<td class="muted">{r["cpu_peak_ts"]}</td><td>{fmt_mem(r["mem_avg_mi"])}</td><td>{fmt_mem(r["mem_peak_mi"])}</td>'
+                     f'<td class="muted">{r["mem_peak_ts"]}</td></tr>')
+        o.append('</table></div>')
+        return "".join(o)
+    h.append(_tbl(app))
+    if inf:
+        h.append(f'<details><summary>Platform infra (kafka / istio / tempo) — {len(inf)} workloads</summary>'+_tbl(inf)+'</details>')
     return "".join(h)
 
 def section_load_alloc(infra, before):
@@ -372,6 +433,19 @@ def section_load_alloc(infra, before):
     h.append('</table></div>')
     return "".join(h)
 
+def section_probes(infra):
+    rows=read_csv(os.path.join(infra,"probe_summary.csv")) if infra else []
+    if not rows: return ""
+    h=['<h3>Liveness / readiness probe failures</h3>']
+    h.append('<p class="muted">Pods whose health checks failed during the run. Repeated liveness failures are what trigger a SIGTERM restart (exit 143).</p>')
+    h.append('<div class="tbl-wrap"><table><tr><th>Namespace</th><th>Pod</th><th>Liveness</th><th>Readiness</th><th>Startup</th><th>Total</th></tr>')
+    for r in rows[:15]:
+        h.append(f'<tr><td>{r["namespace"]}</td><td class="pod-mono">{r["pod"]}</td>'
+                 f'<td>{r["liveness_failures"]}</td><td>{r["readiness_failures"]}</td>'
+                 f'<td>{r["startup_failures"]}</td><td><b>{r["total"]}</b></td></tr>')
+    h.append('</table></div>')
+    return "".join(h)
+
 def section_restarts(infra):
     rows=read_csv(os.path.join(infra,"restart_summary.csv")) if infra else []
     if not rows: return ""
@@ -379,7 +453,7 @@ def section_restarts(infra):
     INFRA=("tempo","kafka","istio","otel","collector","grafana","prometheus","loki","zookeeper")
     app=[r for r in rows if not any(x in r["pod"].lower() or x in r["namespace"].lower() for x in INFRA)]
     infra_noise=[r for r in rows if any(x in r["pod"].lower() or x in r["namespace"].lower() for x in INFRA)]
-    h=['<h2>7 · Pod restarts &amp; reasons</h2>']
+    h=['<h2>10 · Pod restarts &amp; reasons</h2>']
     if app:
         h.append('<p class="muted">App-service pods that restarted during the run, worst first. Exit 143 = SIGTERM (usually liveness-probe kill); 137 = OOMKilled.</p>')
         h.append('<ul class="findings">')
@@ -424,13 +498,17 @@ def section_distribution(infra):
         span=len(items)+1  # +1 for the node total row
         t=tot.get(node,{})
         first=True
+        def _infra_ns(nsn):
+            return any(x in (nsn or "").lower() for x in ("kafka","istio","tempo","zookeeper"))
         for r in items:
+            muted=' style="color:var(--mut)"' if _infra_ns(r["namespace"]) else ''
+            tag=' <span class="muted">(infra)</span>' if _infra_ns(r["namespace"]) else ''
             if first:
                 h.append(f'<tr><td rowspan="{span}" style="vertical-align:middle;font-weight:600;background:var(--band)">{node}</td>'
-                         f'<td>{r["namespace"]}</td><td>{r["pods_before"]}</td><td>{r["pods_peak"]}</td><td>{r["pods_after"]}</td></tr>')
+                         f'<td{muted}>{r["namespace"]}{tag}</td><td{muted}>{r["pods_before"]}</td><td{muted}>{r["pods_peak"]}</td><td{muted}>{r["pods_after"]}</td></tr>')
                 first=False
             else:
-                h.append(f'<tr><td>{r["namespace"]}</td><td>{r["pods_before"]}</td><td>{r["pods_peak"]}</td><td>{r["pods_after"]}</td></tr>')
+                h.append(f'<tr><td{muted}>{r["namespace"]}{tag}</td><td{muted}>{r["pods_before"]}</td><td{muted}>{r["pods_peak"]}</td><td{muted}>{r["pods_after"]}</td></tr>')
         # node total row
         h.append(f'<tr style="border-top:2px solid var(--accent)"><td style="font-weight:600">TOTAL</td>'
                  f'<td style="font-weight:600">{t.get("pods_before","–")}</td>'
@@ -442,13 +520,23 @@ def section_distribution(infra):
 def section_spinup(infra):
     rows=read_csv(os.path.join(infra,"spinup_summary.csv")) if infra else []
     if not rows: return ""
-    h=['<h2>9 · Pod spin-up time (per namespace)</h2>']
+    def _is_infra(name):
+        n=(name or "").lower()
+        return any(x in n for x in ("kafka","istio","tempo","zookeeper","otel","generate-traces"))
+    app=[r for r in rows if not _is_infra(r["service"])]
+    inf=[r for r in rows if _is_infra(r["service"])]
+    h=['<h2>7 · Pod spin-up time (per namespace)</h2>']
     h.append('<p class="muted">How long pods took from created → ready during the run, by namespace/service. Slow spin-up delays HPA response under load.</p>')
-    h.append('<div class="tbl-wrap"><table><tr><th>Namespace</th><th>Service</th><th>Pods</th><th>Avg spin-up</th><th>Max spin-up</th></tr>')
-    for r in rows:
-        h.append(f'<tr><td>{r.get("namespace","")}</td><td>{r["service"]}</td><td>{r["pods"]}</td>'
-                 f'<td>{r["spinup_avg_s"]}s</td><td>{r["spinup_max_s"]}s</td></tr>')
-    h.append('</table></div>')
+    def _tbl(rws):
+        o=['<div class="tbl-wrap"><table><tr><th>Namespace</th><th>Service</th><th>Pods</th><th>Avg spin-up</th><th>Max spin-up</th></tr>']
+        for r in rws:
+            o.append(f'<tr><td>{r.get("namespace","")}</td><td>{r["service"]}</td><td>{r["pods"]}</td>'
+                     f'<td>{r["spinup_avg_s"]}s</td><td>{r["spinup_max_s"]}s</td></tr>')
+        o.append('</table></div>')
+        return "".join(o)
+    h.append(_tbl(app))
+    if inf:
+        h.append(f'<details><summary>Platform infra (kafka / istio / tempo) — {len(inf)} workloads</summary>'+_tbl(inf)+'</details>')
     return "".join(h)
 
 def section_hpa_scaling(infra):
@@ -481,18 +569,67 @@ def section_app_pods(app):
     return "".join(h)
 
 def build_verdict(before, after, infra, app):
-    bits=[]; cls="good"
-    inf=read_lines(os.path.join(infra,"findings.txt")) if infra else []
-    real_cpu = any("Insufficient cpu" in x and "real" in x.lower() for x in inf)
-    restarts = any("restart" in x.lower() for x in inf)
-    ap=read_lines(os.path.join(app,"findings.txt")) if app else []
-    pool = any("connection-pool" in x.lower() or "503" in x for x in ap)
-    if real_cpu: bits.append("real CPU scheduling pressure appeared on perf-transaction"); cls="warn"
-    if restarts: bits.append("some pods restarted mid-run"); cls="warn"
-    if pool: bits.append("connection-pool / 503 signals showed in the logs"); cls="bad"
-    if not bits:
-        return ("good","The run completed without CPU scheduling pressure, pod restarts, or connection-pool errors in the captured window.")
-    return (cls,"During this run, "+"; ".join(bits)+". See the sections below for the per-service detail.")
+    """Headline verdict with real numbers, so a reader gets the result without scrolling."""
+    cls="good"; bits=[]
+    # --- capacity headline ---
+    cap=""
+    try:
+        bc=read_csv(os.path.join(before,"capacity_by_class.csv")) if before else []
+        ac=read_csv(os.path.join(after,"capacity_by_class.csv")) if after else []
+        b=next((r for r in bc if r["class"]=="app-worker"),{})
+        a2=next((r for r in ac if r["class"]=="app-worker"),{})
+        if b:
+            alloc=float(b.get("alloc_cores",0)); free_b=float(b.get("free_cores",0))
+            free_a=float(a2.get("free_cores",free_b) or free_b)
+            pct=100.0*(alloc-free_a)/alloc if alloc else 0
+            cap=(f"The 12 app-worker nodes hold <b>{alloc:.0f} CPU cores</b>; at the end of the run "
+                 f"<b>{free_a:.0f} cores</b> were still free ({pct:.0f}% booked).")
+            if free_a < alloc*0.08: cls="bad"
+            elif free_a < alloc*0.15 and cls!="bad": cls="warn"
+    except: pass
+    # --- what was actually used during the load window (real usage, not projections) ---
+    risk=""
+    try:
+        urows=read_csv(os.path.join(infra,"utilization_summary.csv")) if infra else []
+        INFRA_K=("kafka","istio","tempo","zookeeper","otel","generate-traces")
+        appu=[r for r in urows if not any(k in r["service"].lower() for k in INFRA_K)]
+        if appu:
+            cpu_avg=sum(float(r.get("cpu_avg_m") or 0) for r in appu)/1000.0
+            cpu_pk =sum(float(r.get("cpu_peak_m") or 0) for r in appu)/1000.0
+            mem_pk =sum(float(r.get("mem_peak_mi") or 0) for r in appu)/1024.0
+            _res=0.0
+            try:
+                _b=next((r for r in read_csv(os.path.join(before,"capacity_by_class.csv")) if r["class"]=="app-worker"),{})
+                _res=float(_b.get("reserved_cores",0) or 0)
+            except: pass
+            risk=(f" Across the window the app services actually used <b>{cpu_avg:.1f} cores</b> CPU on average "
+                  f"(<b>{cpu_pk:.1f} cores</b> at peak) and <b>{mem_pk:.0f} GB</b> memory at peak.")
+            # be explicit when the window was idle — otherwise the numbers look wrong
+            if _res and cpu_pk < _res*0.10:
+                risk+=(" CPU use is far below the reserved figure, so this window was near-idle — "
+                       "run the capture during real load for representative numbers.")
+    except: pass
+    # --- failures ---
+    ap_l=read_lines(os.path.join(app,"findings.txt")) if app else []
+    inf_l=read_lines(os.path.join(infra,"findings.txt")) if infra else []
+    n503=sum(1 for x in ap_l if "503" in x)
+    npool=sum(1 for x in ap_l if "connection-pool" in x.lower())
+    if npool: bits.append(f"connection-pool exhaustion on {npool} service(s)"); cls="bad"
+    if n503: bits.append(f"HTTP 503s on {n503} service(s)")
+    try:
+        rs=read_csv(os.path.join(infra,"restart_summary.csv")) if infra else []
+        appr=[r for r in rs if not any(k in (r["pod"]+r["namespace"]).lower()
+              for k in ("kafka","istio","tempo","zookeeper","otel"))]
+        if appr:
+            worst=appr[0]
+            bits.append(f"{len(appr)} app pod(s) restarted (worst: {worst['pod'].split('-')[0]}-… "
+                        f"{worst['restarts']}\u00d7, {worst['interpretation'] or worst['reason']})")
+            if cls!="bad": cls="warn"
+    except: pass
+    if any("Insufficient cpu" in x for x in inf_l):
+        bits.append("real CPU scheduling pressure (Insufficient cpu events)"); cls="bad"
+    fail = (" Failures seen: "+"; ".join(bits)+".") if bits else " No pod restarts, 503s, or scheduling failures were seen in this window."
+    return (cls, (cap+risk+fail).strip())
 
 def build(a):
     _utc=datetime.datetime.now(datetime.timezone.utc)
@@ -514,25 +651,47 @@ def build(a):
              '<a href="https://console-openshift-console.apps.preprod.epay.sbi/" target="_blank" rel="noopener" style="color:#cfe3ff;margin-right:16px">OCP Console ↗</a>'
              '<a href="http://10.177.139.68:3000/" target="_blank" rel="noopener" style="color:#cfe3ff">Grafana ↗</a>'
              '</div></div>')
-    H.append('<div class="nav"><a href="#s1">1 Changed</a><a href="#s2">2 During run</a>'
-             '<a href="#s2b">2b Utilization</a><a href="#s3">3 App logs</a><a href="#s4">4 Nodes</a>'
-             '<a href="#s5">5 HPA</a><a href="#s6">6 Allocation</a><a href="#s7">7 Restarts</a>'
-             '<a href="#s8">8 Distribution</a><a href="#s9">9 Spin-up</a></div>')
+    H.append('<div class="navbtns">'
+             '<a href="#s1">1 · Changed</a><a href="#s2">2 · Allocation</a>'
+             '<a href="#s3">3 · During run</a><a href="#s4">4 · Utilization</a>'
+             '<a href="#s5">5 · Nodes</a><a href="#s6">6 · HPA</a>'
+             '<a href="#s7">7 · Spin-up</a><a href="#s8">8 · Distribution</a>'
+             '<a href="#s9">9 · Log signals</a><a href="#s10">10 · Restarts</a></div>')
     H.append(f'<div class="verdict {vcls}"><b>Summary.</b> {vtext}</div>')
+
+    def band(title, sub):
+        return f'<div class="groupband"><h2 class="group">{title}</h2><span class="gsub">{sub}</span></div>'
+
+    # GROUP A — Capacity & Headroom
+    H.append(band("A · Capacity &amp; Headroom","Did we have room, and what did the load consume?"))
     H.append('<span id="s1"></span>'+section_deltas(a.before,a.after))
-    H.append('<span id="s2"></span>'+section_trends(a.infra))
-    H.append('<span id="s2b"></span>'+section_utilization(a.infra))
-    H.append('<span id="s3"></span>'+section_app(a.app))
-    H.append(section_app_pods(a.app))
-    H.append('<span id="s4"></span>'+section_nodes(a.before,a.after,a.infra))
-    H.append('<span id="s5"></span>'+section_hpa(a.before,a.after,a.infra))
-    H.append(section_hpa_scaling(a.infra))
-    H.append('<span id="s6"></span>'+section_alloc(a.before))
+    H.append('<span id="s2"></span>'+section_alloc(a.before))
+
+    # GROUP B — Resource Usage During Load
+    H.append(band("B · Resource Usage During Load","How hard did everything actually work?"))
+    H.append('<span id="s3"></span>'+section_trends(a.infra))
+    H.append('<span id="s4"></span>'+section_utilization(a.infra))
     H.append(section_load_alloc(a.infra,a.before))
-    H.append('<span id="s7"></span>'+section_restarts(a.infra))
+    H.append('<span id="s5"></span>'+section_nodes(a.before,a.after,a.infra))
+
+    # GROUP C — Scaling Behaviour
+    H.append(band("C · Scaling Behaviour","Did autoscaling keep up with the load?"))
+    H.append('<span id="s6"></span>'+section_hpa(a.before,a.after,a.infra))
+    H.append(section_hpa_scaling(a.infra))
+    H.append('<span id="s7"></span>'+section_spinup(a.infra))
+
+    # GROUP D — Placement & Scheduling
+    H.append(band("D · Placement &amp; Scheduling","Where did pods land across the nodes?"))
     H.append('<span id="s8"></span>'+section_distribution(a.infra))
-    H.append('<span id="s9"></span>'+section_spinup(a.infra))
-    H.append('<p class="muted" style="margin-top:40px;border-top:1px solid var(--line);padding-top:14px">'
+
+    # GROUP E — Health & Failures
+    H.append(band("E · Health &amp; Failures","What broke during the run, and why?"))
+    H.append('<span id="s9"></span>'+section_app(a.app))
+    H.append(section_app_pods(a.app))
+    H.append('<span id="s10"></span>'+section_restarts(a.infra))
+    H.append(section_probes(a.infra))
+
+    H.append('<p class="muted" style="text-align:center;margin-top:40px;border-top:1px solid var(--line);padding-top:14px">'
              '© Saadi M Muzzammil · read-only · raw CSVs retained in each source zip.</p>')
     H.append('</div></body></html>')
     return "".join(H)

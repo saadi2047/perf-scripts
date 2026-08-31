@@ -28,16 +28,24 @@ def svc_of(pod):
 
 # --- per-service request/limit from the FIRST app pod of each service (spec is identical per replica) ---
 svc_res={}  # svc -> {cpu_req,cpu_lim,mem_req,mem_lim, ns}
+# only these namespaces hold real app services for the capacity/allocation finding.
+# kafka/istio/tempo are platform infra — they must NOT inflate the app-service total.
+APP_NS={"perf-transaction","perf-admin","perf-kms","perf-merchant","perf-simulators",
+        "perf-notification","perf-epay-common"}
 for pj in glob.glob(os.path.join(raw,"pods_*.json")):
     try: data=json.load(open(pj))
     except: continue
     ns=os.path.basename(pj)[len("pods_"):-len(".json")]
+    if ns not in APP_NS:  # skip perf-kafka, perf-istio-system, perf-tempo, perf-frontend
+        continue
     for pod in data.get("items",[]):
         name=pod["metadata"]["name"]
         svc=svc_of(name)
-        # skip infra/monitoring pods that aren't app services
+        # skip infra/monitoring/frontend pods that aren't app services
         low=name.lower()
-        if any(j in low for j in ("grafana","collector","prometheus","loki","alertmanager","exporter","operator")):
+        if any(j in low for j in ("grafana","collector","prometheus","loki","alertmanager",
+                                   "exporter","operator","kafka","zookeeper","tempo","istio",
+                                   "generate-traces","-frontend","frontend-")):
             continue
         if svc in svc_res: continue  # one per service is enough
         # sum across app containers (skip istio-proxy)

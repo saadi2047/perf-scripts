@@ -1,139 +1,50 @@
-[osuser@bastion ~]$ cd saadi/M/Muzzammil/perf-testing/
-[osuser@bastion perf-testing]$ ll
-total 10664
--rw-r----- 1 osuser osuser     4829 Aug 28 15:58 alloc_parse.py
--rw-r----- 1 osuser osuser     3242 Aug 29 13:46 app_parse.py
--rw-r----- 1 osuser osuser     6814 Aug 28 13:41 capacity_parse.py
--rw-r----- 1 osuser osuser     1999 Aug 29 13:47 cap_extras.py
--rw-r----- 1 osuser osuser    14583 Aug 29 13:48 infra_parse.py
--rwxr-x--- 1 osuser osuser     5106 Aug 29 13:48 perf-app.sh
--rwxr-x--- 1 osuser osuser     4284 Aug 29 13:49 perf-capacity.sh
--rwxr-x--- 1 osuser osuser     9275 Aug 29 13:50 perf-infra.sh
--rw-r----- 1 osuser osuser    32971 Aug 29 13:51 perf_report.py
--rwxr-x--- 1 osuser osuser     3054 Aug 29 13:50 perf-run.sh
-drwxr-x--- 6 osuser osuser     4096 Aug 29 14:00 perf-test-20260829_135414
--rw-r----- 1 osuser osuser 10804310 Aug 29 14:02 sript.zip
-[osuser@bastion perf-testing]$ rm -rf perf-test-20260829_135414 sript.zip
-[osuser@bastion perf-testing]$ ll
-total 108
--rw-r----- 1 osuser osuser  4829 Aug 28 15:58 alloc_parse.py
--rw-r----- 1 osuser osuser  3242 Aug 29 13:46 app_parse.py
--rw-r----- 1 osuser osuser  6814 Aug 28 13:41 capacity_parse.py
--rw-r----- 1 osuser osuser  1999 Aug 29 13:47 cap_extras.py
--rw-r----- 1 osuser osuser 14583 Aug 29 13:48 infra_parse.py
--rwxr-x--- 1 osuser osuser  5106 Aug 29 13:48 perf-app.sh
--rwxr-x--- 1 osuser osuser  4284 Aug 29 13:49 perf-capacity.sh
--rwxr-x--- 1 osuser osuser  9275 Aug 29 13:50 perf-infra.sh
--rw-r----- 1 osuser osuser 32971 Aug 29 13:51 perf_report.py
--rwxr-x--- 1 osuser osuser  3054 Aug 29 13:50 perf-run.sh
-[osuser@bastion perf-testing]$ vi infra_parse.py
-[osuser@bastion perf-testing]$ vi perf_report.py
-[osuser@bastion perf-testing]$ ls -lrt *.sh *.py
--rw-r----- 1 osuser osuser  6814 Aug 28 13:41 capacity_parse.py
--rw-r----- 1 osuser osuser  4829 Aug 28 15:58 alloc_parse.py
--rw-r----- 1 osuser osuser  3242 Aug 29 13:46 app_parse.py
--rw-r----- 1 osuser osuser  1999 Aug 29 13:47 cap_extras.py
--rwxr-x--- 1 osuser osuser  5106 Aug 29 13:48 perf-app.sh
--rwxr-x--- 1 osuser osuser  4284 Aug 29 13:49 perf-capacity.sh
--rwxr-x--- 1 osuser osuser  9275 Aug 29 13:50 perf-infra.sh
--rwxr-x--- 1 osuser osuser  3054 Aug 29 13:50 perf-run.sh
--rw-r----- 1 osuser osuser 14765 Aug 29 17:46 infra_parse.py
--rw-r----- 1 osuser osuser 34276 Aug 29 17:47 perf_report.py
-[osuser@bastion perf-testing]$ ./perf-run.sh before
-[*] NEW run folder: /home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260829_174906
-[*] perf-capacity.sh  phase=before  out=/home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260829_174906/perf_capacity_before_20260829_174906
-[*] capturing raw node + pod data...
-[*] raw capture done. (parser + HTML in next build step)
-[*] OUTDIR=/home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260829_174906/perf_capacity_before_20260829_174906
-[*] parsing capacity...
-    [parser] node usage parsed for 24 nodes
-    [parser] 24 nodes classified
-    [parser] app pool: 12 worker nodes (0 carry a gemfire taint -> need matching toleration)
-    [parser] largest app-worker free slot: 3526m (fit 3000m pod: YES)
-    [extras] HPA rows: 39, Pending pods: 2
-    [extras] txn-transactionservice HPA (perf): min=15 max=30 current=19
-    [alloc] 14 services; totals cur cpu_req=104400m mem_req=157696Mi | max cpu_req=207100m mem_req=337920Mi
-[*] packaging...
-[✓] DONE
-    dir: /home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260829_174906/perf_capacity_before_20260829_174906
-    zip: /home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260829_174906/perf_capacity_before_20260829_174906.zip
+[osuser@bastion perf-testing-v2]$ ls -lrth
+total 120K
+-rw-r----- 1 osuser osuser 5.3K Aug 31 11:31 alloc_parse.py
+-rw-r----- 1 osuser osuser 3.6K Aug 31 11:31 app_parse.py
+-rw-r----- 1 osuser osuser 2.0K Aug 31 11:32 cap_extras.py
+-rw-r----- 1 osuser osuser 7.1K Aug 31 11:33 capacity_parse.py
+-rw-r----- 1 osuser osuser  17K Aug 31 11:33 infra_parse.py
+-rw-r----- 1 osuser osuser 5.0K Aug 31 11:33 perf-app.sh
+-rw-r----- 1 osuser osuser 4.2K Aug 31 11:34 perf-capacity.sh
+-rw-r----- 1 osuser osuser 9.9K Aug 31 11:34 perf-infra.sh
+-rw-r----- 1 osuser osuser 3.0K Aug 31 11:37 perf-run.sh
+-rw-r----- 1 osuser osuser  42K Aug 31 11:38 perf_report.py
+[osuser@bastion perf-testing-v2]$ chmod +x perf-run.sh perf-capacity.sh perf-infra.sh perf-app.sh
+[osuser@bastion perf-testing-v2]$ ls -lrth
+total 120K
+-rw-r----- 1 osuser osuser 5.3K Aug 31 11:31 alloc_parse.py
+-rw-r----- 1 osuser osuser 3.6K Aug 31 11:31 app_parse.py
+-rw-r----- 1 osuser osuser 2.0K Aug 31 11:32 cap_extras.py
+-rw-r----- 1 osuser osuser 7.1K Aug 31 11:33 capacity_parse.py
+-rw-r----- 1 osuser osuser  17K Aug 31 11:33 infra_parse.py
+-rwxr-x--- 1 osuser osuser 5.0K Aug 31 11:33 perf-app.sh
+-rwxr-x--- 1 osuser osuser 4.2K Aug 31 11:34 perf-capacity.sh
+-rwxr-x--- 1 osuser osuser 9.9K Aug 31 11:34 perf-infra.sh
+-rwxr-x--- 1 osuser osuser 3.0K Aug 31 11:37 perf-run.sh
+-rw-r----- 1 osuser osuser  42K Aug 31 11:38 perf_report.py
 
-    Key outputs:
-      node_capacity.csv      — per-node alloc/reserved/free, classified
-      capacity_by_class.csv  — app-worker vs gemfire vs infra (the 112c truth)
-      fit_check.txt          — can a 3000m txn pod be placed?
-      hpa_state.csv          — live min/max/current (repo-drift check)
-      pending_pods.csv       — anything Pending at snapshot
-[osuser@bastion perf-testing]$ ./perf-run.sh during -i 30 -d 300
-[*] run folder: /home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260829_174906
-[*] launching infra + app collectors in parallel for 5 min...
-[app]   [*] perf-app.sh  interval=30s  samples=10  (~5 min)
-[app]   [*] namespaces: perf-transaction perf-admin perf-kms perf-merchant perf-simulators perf-notification perf-epay-common perf-frontend perf-istio-system perf-kafka perf-tempo
-[app]   [*] out: /home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260829_174906/perf_app_20260829_174918  (filtered logs only; app metrics via Dynatrace)
-[infra] [*] perf-infra.sh  interval=30s  samples=10  (~5 min)
-[infra] [*] namespaces: perf-transaction perf-admin perf-kms perf-merchant perf-simulators perf-notification perf-epay-common perf-frontend perf-istio-system perf-kafka perf-tempo
-[infra] [*] out: /home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260829_174906/perf_infra_20260829_174918
-[infra] [2026-08-29T12:19:18Z] sample 1/10 ... done (14s)
-[app]   [2026-08-29T12:19:18Z] sample 1/10 ... done (36s)
-[app]       [!] WARN: cycle 36s >= interval 30s
-[infra] [2026-08-29T12:19:48Z] sample 2/10 ... done (13s)
-[app]   [2026-08-29T12:19:54Z] sample 2/10 ... done (36s)
-[app]       [!] WARN: cycle 36s >= interval 30s
-[infra] [2026-08-29T12:20:18Z] sample 3/10 ... done (14s)
-[infra] [2026-08-29T12:20:48Z] sample 4/10 ... done (14s)
-[app]   [2026-08-29T12:20:30Z] sample 3/10 ... done (35s)
-[app]       [!] WARN: cycle 35s >= interval 30s
-[infra] [2026-08-29T12:21:18Z] sample 5/10 ... done (13s)
-[app]   [2026-08-29T12:21:05Z] sample 4/10 ... done (35s)
-[app]       [!] WARN: cycle 35s >= interval 30s
-[infra] [2026-08-29T12:21:48Z] sample 6/10 ... done (14s)
-[app]   [2026-08-29T12:21:40Z] sample 5/10 ... done (35s)
-[app]       [!] WARN: cycle 35s >= interval 30s
-[infra] [2026-08-29T12:22:18Z] sample 7/10 ... done (13s)
-[app]   [2026-08-29T12:22:15Z] sample 6/10 ... done (35s)
-[app]       [!] WARN: cycle 35s >= interval 30s
-[infra] [2026-08-29T12:22:48Z] sample 8/10 ... done (13s)
-[app]   [2026-08-29T12:22:50Z] sample 7/10 ... done (35s)
-[app]       [!] WARN: cycle 35s >= interval 30s
-[infra] [2026-08-29T12:23:18Z] sample 9/10 ... done (13s)
-[app]   [2026-08-29T12:23:25Z] sample 8/10 ... done (35s)
-[app]       [!] WARN: cycle 35s >= interval 30s
-[infra] [2026-08-29T12:23:48Z] sample 10/10 ... done (14s)
-[infra] [*] collection complete, parsing trends...
-[infra]     [infra] node utilization aggregated for 24 nodes
-[infra]     [infra] 15 services, 10 samples
-[infra]     [infra] 10 findings written
-[infra]        - adminservice: CPU peaked at 178m and averaged 86m when settled (2.1x higher at peak than settled).
-[infra]        - javautilityapisimulator: CPU peaked at 12m and averaged 6m when settled (2.0x higher at peak than settled).
-[infra]        - kmsservice: CPU peaked at 30m and averaged 18m when settled (1.7x higher at peak than settled).
-[infra]        - merchant: CPU peaked at 12m and averaged 6m when settled (2.0x higher at peak than settled).
-[infra]        - merchantservice: CPU peaked at 115m and averaged 62m when settled (1.9x higher at peak than settled).
-[infra]        - paymentservice: CPU peaked at 137m and averaged 82m when settled (1.7x higher at peak than settled).
-[infra]     [infra-v2] extended captures written: utilization, restarts, spinup, distribution, hpa-scaling
-[infra] [*] packaging...
-[infra] [✓] DONE  dir=/home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260829_174906/perf_infra_20260829_174918  zip=/home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260829_174906/perf_infra_20260829_174918.zip
-[app]   [2026-08-29T12:24:00Z] sample 9/10 ... done (34s)
-[app]       [!] WARN: cycle 34s >= interval 30s
-[app]   [2026-08-29T12:24:34Z] sample 10/10 ... done (35s)
-[app]       [!] WARN: cycle 35s >= interval 30s
-[app]   [*] parsing log signals...
-[app]       [app] 6 services with log signals, 7 findings
-[app]          - kafka: 6 HTTP 503 / service-unavailable line(s). [pods: perf-kafka-cluster-controller-3, perf-kafka-cluster-controller-5]
-[app]          - kafka: 139 exception/stacktrace occurrence(s). [pods: perf-kafka-cluster-broker-0, perf-kafka-cluster-broker-1, perf-kafka-cluster-controller-3 +1 more]
-[app]          - kmsservice: 2 HTTP 503 / service-unavailable line(s). [pods: kms-kmsservice-6558d96b54-s56cw]
-[app]          - merchant: 30 ERROR-level line(s) — elevated. [pods: merchantfe-merchant-frontend-687db6d847-wllzw]
-[app]          - paymentservice: 44 HTTP 503 / service-unavailable line(s). [pods: payment-paymentservice-8449769dd9-4bdbx, payment-paymentservice-8449769dd9-8vmfn, payment-paymentservice-8449769dd9-bml7f +7 more]
-[app]          - perf: 48 HTTP 503 / service-unavailable line(s). [pods: istiod-perf-istio-557f644598-2zc47, istiod-perf-istio-557f644598-szj5x]
-[app]          - transaction: 148 ERROR-level line(s) — elevated. [pods: transactionfe-transaction-frontend-85d556d657-7jg5c, transactionfe-transaction-frontend-85d556d657-fm75v, transactionfe-transaction-frontend-85d556d657-jv9ct +2 more]
-[app]   [*] packaging...
-[app]   [✓] DONE  dir=/home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260829_174906/perf_app_20260829_174918  zip=/home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260829_174906/perf_app_20260829_174918.zip
-[✓] both collectors finished
-[osuser@bastion perf-testing]$ ./perf-run.sh after
-[*] run folder: /home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260829_174906
-[*] perf-capacity.sh  phase=after  out=/home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260829_174906/perf_capacity_after_20260829_175532
+
+Using project "perf-kafka".
+[osuser@bastion perf-testing-v2]$ oc whoami
+V1021008
+[osuser@bastion perf-testing-v2]$ ls -lrt *.sh *.py
+-rw-r----- 1 osuser osuser  5401 Aug 31 11:31 alloc_parse.py
+-rw-r----- 1 osuser osuser  3596 Aug 31 11:31 app_parse.py
+-rw-r----- 1 osuser osuser  1999 Aug 31 11:32 cap_extras.py
+-rw-r----- 1 osuser osuser  7253 Aug 31 11:33 capacity_parse.py
+-rw-r----- 1 osuser osuser 16709 Aug 31 11:33 infra_parse.py
+-rwxr-x--- 1 osuser osuser  5106 Aug 31 11:33 perf-app.sh
+-rwxr-x--- 1 osuser osuser  4284 Aug 31 11:34 perf-capacity.sh
+-rwxr-x--- 1 osuser osuser 10106 Aug 31 11:34 perf-infra.sh
+-rwxr-x--- 1 osuser osuser  3054 Aug 31 11:37 perf-run.sh
+-rw-r----- 1 osuser osuser 42974 Aug 31 11:38 perf_report.py
+[osuser@bastion perf-testing-v2]$ ./perf-run.sh before
+[*] NEW run folder: /home/osuser/saadi/M/Muzzammil/perf-testing-v2/perf-test-20260831_114057
+[*] perf-capacity.sh  phase=before  out=/home/osuser/saadi/M/Muzzammil/perf-testing-v2/perf-test-20260831_114057/perf_capacity_before_20260831_114057
 [*] capturing raw node + pod data...
 [*] raw capture done. (parser + HTML in next build step)
-[*] OUTDIR=/home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260829_174906/perf_capacity_after_20260829_175532
+[*] OUTDIR=/home/osuser/saadi/M/Muzzammil/perf-testing-v2/perf-test-20260831_114057/perf_capacity_before_20260831_114057
 [*] parsing capacity...
     [parser] node usage parsed for 24 nodes
     [parser] 24 nodes classified
@@ -141,11 +52,11 @@ total 108
     [parser] largest app-worker free slot: 3640m (fit 3000m pod: YES)
     [extras] HPA rows: 39, Pending pods: 2
     [extras] txn-transactionservice HPA (perf): min=15 max=30 current=19
-    [alloc] 14 services; totals cur cpu_req=104400m mem_req=157696Mi | max cpu_req=207100m mem_req=337920Mi
+    [alloc] 10 services; totals cur cpu_req=97650m mem_req=137728Mi | max cpu_req=199100m mem_req=315392Mi
 [*] packaging...
 [✓] DONE
-    dir: /home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260829_174906/perf_capacity_after_20260829_175532
-    zip: /home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260829_174906/perf_capacity_after_20260829_175532.zip
+    dir: /home/osuser/saadi/M/Muzzammil/perf-testing-v2/perf-test-20260831_114057/perf_capacity_before_20260831_114057
+    zip: /home/osuser/saadi/M/Muzzammil/perf-testing-v2/perf-test-20260831_114057/perf_capacity_before_20260831_114057.zip
 
     Key outputs:
       node_capacity.csv      — per-node alloc/reserved/free, classified
@@ -153,83 +64,101 @@ total 108
       fit_check.txt          — can a 3000m txn pod be placed?
       hpa_state.csv          — live min/max/current (repo-drift check)
       pending_pods.csv       — anything Pending at snapshot
-[osuser@bastion perf-testing]$ ./perf-run.sh report
-[*] run folder: /home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260829_174906
-    before=/home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260829_174906/perf_capacity_before_20260829_174906
-    after=/home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260829_174906/perf_capacity_after_20260829_175532
-    infra=/home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260829_174906/perf_infra_20260829_174918
-    app=/home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260829_174906/perf_app_20260829_174918
-[report] wrote /home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260829_174906/PERF_Report_20260829_175619.html
-[✓] report: /home/osuser/saadi/M/Muzzammil/perf-testing/perf-test-20260829_174906/PERF_Report_20260829_175619.html
-[osuser@bastion perf-testing]$ cd perf-test-20260829_174906/
-[osuser@bastion perf-test-20260829_174906]$ ls -d perf_capacity_* perf_infra_* perf_app_* PERF_Report_*.html
-perf_app_20260829_174918      perf_capacity_after_20260829_175532      perf_capacity_before_20260829_174906      perf_infra_20260829_174918      PERF_Report_20260829_175619.html
-perf_app_20260829_174918.zip  perf_capacity_after_20260829_175532.zip  perf_capacity_before_20260829_174906.zip  perf_infra_20260829_174918.zip
-[osuser@bastion perf-test-20260829_174906]$ wc -l perf_infra_*/node_usage.csv
-241 perf_infra_20260829_174918/node_usage.csv
-[osuser@bastion perf-test-20260829_174906]$ cat  perf_infra_*/node_trends.csv
-node,cpu_pct_avg,cpu_pct_peak,mem_pct_avg,mem_pct_peak,cpu_m_avg,cpu_m_peak
-gemfirecache1.preprod.epay.sbi,2.0,2.0,22.0,22.0,402,440
-gemfirecache2.preprod.epay.sbi,2.4,3.0,21.0,21.0,456,484
-gemfirecache3.preprod.epay.sbi,2.6,3.0,19.0,19.0,469,515
-gemfirecache4.preprod.epay.sbi,4.3,6.0,20.0,20.0,749,961
-gemfirecache5.preprod.epay.sbi,3.3,4.0,23.2,24.0,589,687
-infra1.preprod.epay.sbi,9.5,12.0,26.8,27.0,1538,1954
-infra2.preprod.epay.sbi,5.1,6.0,17.0,17.0,889,943
-infra3.preprod.epay.sbi,9.8,17.0,24.0,24.0,1603,2781
-kafbroker1.preprod.epay.sbi,11.0,12.0,33.0,33.0,1797,1933
-kafbroker2.preprod.epay.sbi,10.8,12.0,31.0,31.0,1745,1909
-kafbroker3.preprod.epay.sbi,7.3,10.0,32.0,32.0,1188,1654
-master1.preprod.epay.sbi,22.3,26.0,59.0,59.0,3542,4090
-master2.preprod.epay.sbi,22.7,28.0,53.0,53.0,3563,4415
-master3.preprod.epay.sbi,16.3,23.0,40.0,40.0,2606,3593
-worker1.preprod.epay.sbi,3.3,4.0,19.0,19.0,608,644
-worker2.preprod.epay.sbi,6.7,8.0,23.0,23.0,1128,1337
-worker3.preprod.epay.sbi,6.2,18.0,22.1,23.0,1053,2857
-worker4.preprod.epay.sbi,5.0,6.0,29.0,29.0,850,1032
-worker5.preprod.epay.sbi,2.0,2.0,26.0,26.0,424,453
-worker6.preprod.epay.sbi,3.6,4.0,24.0,24.0,629,669
-worker7.preprod.epay.sbi,2.0,2.0,22.0,22.0,421,463
-zookeeper1.preprod.epay.sbi,2.0,2.0,24.0,24.0,857,967
-zookeeper2.preprod.epay.sbi,0.7,1.0,13.0,13.0,350,443
-zookeeper3.preprod.epay.sbi,0.7,1.0,17.0,17.0,365,403
-[osuser@bastion perf-test-20260829_174906]$ cat  perf_infra_*/findings.txt
-adminservice: CPU peaked at 178m and averaged 86m when settled (2.1x higher at peak than settled).
-javautilityapisimulator: CPU peaked at 12m and averaged 6m when settled (2.0x higher at peak than settled).
-kmsservice: CPU peaked at 30m and averaged 18m when settled (1.7x higher at peak than settled).
-merchant: CPU peaked at 12m and averaged 6m when settled (2.0x higher at peak than settled).
-merchantservice: CPU peaked at 115m and averaged 62m when settled (1.9x higher at peak than settled).
-paymentservice: CPU peaked at 137m and averaged 82m when settled (1.7x higher at peak than settled).
-perf: CPU peaked at 430m and averaged 92m when settled (4.7x higher at peak than settled).
-perfsimulator: CPU peaked at 6m and averaged 4m when settled (1.7x higher at peak than settled).
-transaction: CPU peaked at 39m and averaged 24m when settled (1.6x higher at peak than settled).
-perf-epay-common: 10 scheduling event(s) from affinity/PVC/taint — NOT cpu-related (excluded from capacity signal).
-[osuser@bastion perf-test-20260829_174906]$ cat  perf_capacity_before_*/resource_alloc.csv
-service,namespace,cpu_req_m,cpu_lim_m,mem_req_mi,mem_lim_mi,replicas_cur,replicas_max,cpu_req_cur_m,cpu_lim_cur_m,mem_req_cur_mi,mem_lim_cur_mi,cpu_req_max_m,cpu_lim_max_m,mem_req_max_mi,mem_lim_max_mi
-adminservice,perf-admin,2000,3000,3072,4096,10,20,20000,30000,30720,40960,40000,60000,61440,81920
-javautilityapisimulator,perf-simulators,1000,2000,1024,2048,2,10,2000,4000,2048,4096,10000,20000,10240,20480
-kafka,perf-kafka,1000,2000,2048,4096,1,1,1000,2000,2048,4096,1000,2000,2048,4096
-kmsservice,perf-kms,1200,4000,2048,4096,2,10,2400,8000,4096,8192,12000,40000,20480,40960
-merchant,perf-frontend,250,500,512,1024,1,4,250,500,512,1024,1000,2000,2048,4096
-merchantservice,perf-merchant,500,3000,2048,3072,2,15,1000,6000,4096,6144,7500,45000,30720,46080
-merchantsimulaterfe,perf-simulators,150,500,512,1024,1,4,150,500,512,1024,600,2000,2048,4096
-paymentservice,perf-transaction,1000,3000,3072,4096,10,20,10000,30000,30720,40960,20000,60000,61440,81920
-perf,perf-istio-system,500,0,2048,0,6,6,3000,0,12288,0,3000,0,12288,0
-perfsimulator,perf-simulators,500,2000,1024,2048,1,6,500,2000,1024,2048,3000,12000,6144,12288
-reportservice,perf-merchant,600,2500,2048,4096,1,10,600,2500,2048,4096,6000,25000,20480,40960
-stubsservice,perf-simulators,2000,3000,2048,4096,2,5,4000,6000,4096,8192,10000,15000,10240,20480
-transaction,perf-frontend,500,2000,1024,3072,5,6,2500,10000,5120,15360,3000,12000,6144,18432
-transactionservice,perf-transaction,3000,5000,3072,6144,19,30,57000,95000,58368,116736,90000,150000,92160,184320
-TOTAL,,,,,,,,104400,196500,157696,252928,207100,445000,337920,560128
-[osuser@bastion perf-test-20260829_174906]$ head perf_capacity_before_*/hpa_state.csv
-namespace,hpa,min,max,current,desired
-perf-admin,admin-adminservice-hpa,10,20,10,10
-perf-frontend,merchantfe-merchant-frontend-hpa,1,4,1,1
-perf-frontend,transactionfe-transaction-frontend-hpa,2,6,5,5
-perf-istio-system,istio-gateway-hpa,2,6,6,6
-perf-istio-system,istiod-hpa,2,6,,0
-perf-istio-system,istiod-perf-istio,1,5,2,2
-perf-kms,kms-kmsservice-hpa,2,10,2,2
-perf-merchant,merchant-merchantservice-hpa,2,15,2,2
-perf-merchant,report-reportservice-hpa,1,10,1,1
-[osuser@bastion perf-test-20260829_174906]$
+[osuser@bastion perf-testing-v2]$ ./perf-run.sh during -i 30 -d 300
+[*] run folder: /home/osuser/saadi/M/Muzzammil/perf-testing-v2/perf-test-20260831_114057
+[*] launching infra + app collectors in parallel for 5 min...
+[app]   [*] perf-app.sh  interval=30s  samples=10  (~5 min)
+[app]   [*] namespaces: perf-transaction perf-admin perf-kms perf-merchant perf-simulators perf-notification perf-epay-common perf-frontend perf-istio-system perf-kafka perf-tempo
+[app]   [*] out: /home/osuser/saadi/M/Muzzammil/perf-testing-v2/perf-test-20260831_114057/perf_app_20260831_114112  (filtered logs only; app metrics via Dynatrace)
+[infra] [*] perf-infra.sh  interval=30s  samples=10  (~5 min)
+[infra] [*] namespaces: perf-transaction perf-admin perf-kms perf-merchant perf-simulators perf-notification perf-epay-common perf-frontend perf-istio-system perf-kafka perf-tempo
+[infra] [*] out: /home/osuser/saadi/M/Muzzammil/perf-testing-v2/perf-test-20260831_114057/perf_infra_20260831_114112
+[infra] [2026-08-31T06:11:12Z] sample 1/10 ... done (15s)
+[app]   [2026-08-31T06:11:12Z] sample 1/10 ... done (35s)
+[app]       [!] WARN: cycle 35s >= interval 30s
+[infra] [2026-08-31T06:11:42Z] sample 2/10 ... done (16s)
+[app]   [2026-08-31T06:11:47Z] sample 2/10 ... done (35s)
+[app]       [!] WARN: cycle 35s >= interval 30s
+[infra] [2026-08-31T06:12:12Z] sample 3/10 ... done (15s)
+[app]   [2026-08-31T06:12:22Z] sample 3/10 ... done (33s)
+[app]       [!] WARN: cycle 33s >= interval 30s
+[infra] [2026-08-31T06:12:42Z] sample 4/10 ... done (15s)
+[infra] [2026-08-31T06:13:12Z] sample 5/10 ... done (15s)
+[app]   [2026-08-31T06:12:55Z] sample 4/10 ... done (34s)
+[app]       [!] WARN: cycle 34s >= interval 30s
+[infra] [2026-08-31T06:13:42Z] sample 6/10 ... done (16s)
+[app]   [2026-08-31T06:13:29Z] sample 5/10 ... done (33s)
+[app]       [!] WARN: cycle 33s >= interval 30s
+[infra] [2026-08-31T06:14:12Z] sample 7/10 ... done (15s)
+[app]   [2026-08-31T06:14:02Z] sample 6/10 ... done (34s)
+[app]       [!] WARN: cycle 34s >= interval 30s
+[infra] [2026-08-31T06:14:42Z] sample 8/10 ... done (16s)
+[app]   [2026-08-31T06:14:36Z] sample 7/10 ... done (35s)
+[app]       [!] WARN: cycle 35s >= interval 30s
+[infra] [2026-08-31T06:15:12Z] sample 9/10 ... done (16s)
+[app]   [2026-08-31T06:15:11Z] sample 8/10 ... done (34s)
+[app]       [!] WARN: cycle 34s >= interval 30s
+[infra] [2026-08-31T06:15:42Z] sample 10/10 ... done (21s)
+[infra] [*] collection complete, parsing trends...
+[infra]     [infra] node utilization aggregated for 24 nodes
+[infra]     [infra] 15 services, 10 samples
+[infra]     [infra] 8 findings written
+[infra]        - javautilityapisimulator: CPU peaked at 19m and averaged 6m when settled (3.2x higher at peak than settled).
+[infra]        - kmsservice: CPU peaked at 40m and averaged 22m when settled (1.8x higher at peak than settled).
+[infra]        - merchantfe: CPU peaked at 15m and averaged 7m when settled (2.1x higher at peak than settled).
+[infra]        - merchantservice: CPU peaked at 91m and averaged 59m when settled (1.5x higher at peak than settled).
+[infra]        - merchantsimulaterfe: CPU peaked at 12m and averaged 3m when settled (4.0x higher at peak than settled).
+[infra]        - paymentservice: CPU peaked at 149m and averaged 94m when settled (1.6x higher at peak than settled).
+[infra]     [infra-v2] extended captures written: utilization, restarts, spinup, distribution, hpa-scaling
+[infra] [*] packaging...
+[infra] [✓] DONE  dir=/home/osuser/saadi/M/Muzzammil/perf-testing-v2/perf-test-20260831_114057/perf_infra_20260831_114112  zip=/home/osuser/saadi/M/Muzzammil/perf-testing-v2/perf-test-20260831_114057/perf_infra_20260831_114112.zip
+[app]   [2026-08-31T06:15:45Z] sample 9/10 ... done (34s)
+[app]       [!] WARN: cycle 34s >= interval 30s
+[app]   [2026-08-31T06:16:19Z] sample 10/10 ... done (31s)
+[app]       [!] WARN: cycle 31s >= interval 30s
+[app]   [*] parsing log signals...
+[app]       [app] 6 services with log signals, 7 findings
+[app]          - istiod: 37 HTTP 503 / service-unavailable line(s). [pods: istiod-perf-istio-557f644598-2zc47, istiod-perf-istio-557f644598-rqhjs]
+[app]          - kafka: 5 HTTP 503 / service-unavailable line(s). [pods: perf-kafka-cluster-broker-2, perf-kafka-cluster-controller-3]
+[app]          - kafka: 137 exception/stacktrace occurrence(s). [pods: perf-kafka-cluster-broker-0, perf-kafka-cluster-broker-1, perf-kafka-cluster-controller-3]
+[app]          - kmsservice: 1 HTTP 503 / service-unavailable line(s). [pods: kms-kmsservice-6558d96b54-ftdsh]
+[app]          - merchantfe: 30 ERROR-level line(s) — elevated. [pods: merchantfe-merchant-frontend-687db6d847-wllzw]
+[app]          - paymentservice: 74 HTTP 503 / service-unavailable line(s). [pods: payment-paymentservice-8449769dd9-4bdbx, payment-paymentservice-8449769dd9-8vmfn, payment-paymentservice-8449769dd9-bml7f +7 more]
+[app]          - transactionfe: 150 ERROR-level line(s) — elevated. [pods: transactionfe-transaction-frontend-85d556d657-7jg5c, transactionfe-transaction-frontend-85d556d657-fm75v, transactionfe-transaction-frontend-85d556d657-jv9ct +2 more]
+[app]   [*] packaging...
+[app]   [✓] DONE  dir=/home/osuser/saadi/M/Muzzammil/perf-testing-v2/perf-test-20260831_114057/perf_app_20260831_114112  zip=/home/osuser/saadi/M/Muzzammil/perf-testing-v2/perf-test-20260831_114057/perf_app_20260831_114112.zip
+[✓] both collectors finished
+[osuser@bastion perf-testing-v2]$ ./perf-run.sh after
+[*] run folder: /home/osuser/saadi/M/Muzzammil/perf-testing-v2/perf-test-20260831_114057
+[*] perf-capacity.sh  phase=after  out=/home/osuser/saadi/M/Muzzammil/perf-testing-v2/perf-test-20260831_114057/perf_capacity_after_20260831_114708
+[*] capturing raw node + pod data...
+[*] raw capture done. (parser + HTML in next build step)
+[*] OUTDIR=/home/osuser/saadi/M/Muzzammil/perf-testing-v2/perf-test-20260831_114057/perf_capacity_after_20260831_114708
+[*] parsing capacity...
+    [parser] node usage parsed for 24 nodes
+    [parser] 24 nodes classified
+    [parser] app pool: 12 worker nodes (0 carry a gemfire taint -> need matching toleration)
+    [parser] largest app-worker free slot: 3640m (fit 3000m pod: YES)
+    [extras] HPA rows: 39, Pending pods: 2
+    [extras] txn-transactionservice HPA (perf): min=15 max=30 current=19
+    [alloc] 10 services; totals cur cpu_req=97650m mem_req=137728Mi | max cpu_req=199100m mem_req=315392Mi
+[*] packaging...
+[✓] DONE
+    dir: /home/osuser/saadi/M/Muzzammil/perf-testing-v2/perf-test-20260831_114057/perf_capacity_after_20260831_114708
+    zip: /home/osuser/saadi/M/Muzzammil/perf-testing-v2/perf-test-20260831_114057/perf_capacity_after_20260831_114708.zip
+
+    Key outputs:
+      node_capacity.csv      — per-node alloc/reserved/free, classified
+      capacity_by_class.csv  — app-worker vs gemfire vs infra (the 112c truth)
+      fit_check.txt          — can a 3000m txn pod be placed?
+      hpa_state.csv          — live min/max/current (repo-drift check)
+      pending_pods.csv       — anything Pending at snapshot
+[osuser@bastion perf-testing-v2]$ ./perf-run.sh report
+[*] run folder: /home/osuser/saadi/M/Muzzammil/perf-testing-v2/perf-test-20260831_114057
+    before=/home/osuser/saadi/M/Muzzammil/perf-testing-v2/perf-test-20260831_114057/perf_capacity_before_20260831_114057
+    after=/home/osuser/saadi/M/Muzzammil/perf-testing-v2/perf-test-20260831_114057/perf_capacity_after_20260831_114708
+    infra=/home/osuser/saadi/M/Muzzammil/perf-testing-v2/perf-test-20260831_114057/perf_infra_20260831_114112
+    app=/home/osuser/saadi/M/Muzzammil/perf-testing-v2/perf-test-20260831_114057/perf_app_20260831_114112
+[report] wrote /home/osuser/saadi/M/Muzzammil/perf-testing-v2/perf-test-20260831_114057/PERF_Report_20260831_114729.html
+[✓] report: /home/osuser/saadi/M/Muzzammil/perf-testing-v2/perf-test-20260831_114057/PERF_Report_20260831_114729.html
+[osuser@bastion perf-testing-v2]$

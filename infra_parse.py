@@ -253,10 +253,15 @@ if _os.path.exists(rr):
         f.write("namespace,pod,restarts,reason,exit_code,interpretation\n")
         for (ns,pod),(rc,reason,ec) in sorted(worst.items(),key=lambda x:-x[1][0]):
             interp=""
-            if str(ec)=="143": interp="SIGTERM (liveness probe kill or graceful stop)"
-            elif str(ec)=="137": interp="SIGKILL (OOMKilled or forced)"
-            elif reason=="OOMKilled": interp="Out of memory"
-            elif reason=="Error": interp="Container error/crash"
+            e=str(ec)
+            if reason=="OOMKilled" or e=="137": interp="OOMKilled / SIGKILL — container exceeded its memory limit"
+            elif e=="143": interp="SIGTERM — killed by liveness probe or graceful stop"
+            elif e=="1": interp="Application exited with error (exit 1) — check the pod logs for the stack trace"
+            elif e=="2": interp="Shell/command misuse (exit 2)"
+            elif e in ("126","127"): interp="Container command not found or not executable"
+            elif e=="0": interp="Container exited cleanly (completed or was replaced)"
+            elif reason=="Error": interp=f"Container error/crash (exit {e})"
+            elif reason: interp=reason
             f.write(f"{ns},{pod},{rc},{reason},{ec},{interp}\n")
 
 # ---- 3. Spin-up times (avg per service) ----

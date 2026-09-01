@@ -134,6 +134,8 @@ PYHPA
     done < "$sdir/pods_${ns}.txt"
 
     # --- deep pod details via JSON: restart reasons (OOM/exit), spin-up timings ---
+    # (expensive: run every DEEP_EVERY-th sample, and always on the first/last)
+    if [ $(( (i - 1) % DEEP_EVERY )) -eq 0 ] || [ "$i" -eq "$SAMPLES" ]; then
     oc -n "$ns" get pods -o json 2>/dev/null > "$sdir/podsjson_${ns}.json"
     if [ -s "$sdir/podsjson_${ns}.json" ]; then
       python3 - "$sdir/podsjson_${ns}.json" "$i" "$now" "$ns" >> "$OUTDIR/restart_reasons.csv" 2>/dev/null <<'PYJSON'
@@ -172,10 +174,13 @@ for p in data.get("items",[]):
     print(f"{samp},{ts},{ns},{nm},{phase},{created},{sched},{ready},{spin}")
 PYJSON
     fi
-
+    fi
 
     # --- liveness/readiness probe failures (explains SIGTERM restarts) ---
+    # (events are cumulative, so sampling every DEEP_EVERY-th cycle loses nothing)
+    if [ $(( (i - 1) % DEEP_EVERY )) -eq 0 ] || [ "$i" -eq "$SAMPLES" ]; then
     oc -n "$ns" get events --field-selector reason=Unhealthy --no-headers 2>/dev/null > "$sdir/probe_${ns}.txt"
+    fi
     if [ -s "$sdir/probe_${ns}.txt" ]; then
       # count per pod, split liveness vs readiness
       awk -v s="$i" -v t="$now" -v n="$ns" '

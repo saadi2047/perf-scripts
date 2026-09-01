@@ -401,7 +401,16 @@ def section_utilization(infra):
     app=[r for r in rows if not _is_infra(r["service"])]
     inf=[r for r in rows if _is_infra(r["service"])]
     h=['<h2>4 · Actual resource utilization during load</h2>']
-    h.append('<p class="muted">Real CPU/memory used (not provisioned) across the full load window — average, and peak with the IST timestamp it occurred.</p>')
+    aw=read_kv(os.path.join(infra,"active_window.txt")) if infra else {}
+    _scopetxt="across the load window"
+    try:
+        _a=int(aw.get("active_samples",0)); _t=int(aw.get("total_samples",0))
+        if _a and _t and _a<_t:
+            _s=_fmt_ts(aw.get("active_start","")); _e=_fmt_ts(aw.get("active_end",""))
+            _scopetxt=(f'over the <b>active load period only</b> ({_s} → {_e}, {_a} of {_t} samples) — '
+                       f'idle samples after the load stopped are excluded so the averages are not diluted')
+    except: pass
+    h.append(f'<p class="muted">Real CPU/memory used (not provisioned) {_scopetxt}. Peak values show the IST timestamp they occurred. Figures are <b>whole-pod</b> (app container + istio-proxy sidecar); Dynatrace per-container views show the app container only.</p>')
     def _tbl(rws):
         o=['<div class="tbl-wrap"><table><tr><th>Service</th><th>CPU avg</th><th>CPU peak</th><th>CPU peak time</th><th>Mem avg</th><th>Mem peak</th><th>Mem peak time</th></tr>']
         for r in sorted(rws,key=lambda x:-float(x.get("cpu_peak_m") or 0)):
@@ -413,6 +422,25 @@ def section_utilization(infra):
     h.append(_tbl(app))
     if inf:
         h.append(f'<details><summary>Platform infra (kafka / istio / tempo) — {len(inf)} workloads</summary>'+_tbl(inf)+'</details>')
+    return "".join(h)
+
+def section_container_split(infra):
+    rows=read_csv(os.path.join(infra,"container_split.csv")) if infra else []
+    if not rows: return ""
+    INF=("kafka","istio","tempo","zookeeper","otel","istiod","generate-traces")
+    rows=[r for r in rows if not any(k in r["service"].lower() for k in INF)]
+    rows=[r for r in rows if float(r.get("app_cpu_avg_m") or 0)>0]
+    if not rows: return ""
+    h=['<h3>App container vs istio-proxy sidecar</h3>']
+    h.append('<p class="muted">Pod CPU includes the istio-proxy sidecar. Dynatrace\'s per-container view shows the '
+             'app container only — this table reconciles the two.</p>')
+    h.append('<div class="tbl-wrap"><table><tr><th>Service</th><th>App CPU avg</th><th>App CPU peak</th>'
+             '<th>Sidecar avg</th><th>Sidecar peak</th><th>Sidecar share</th></tr>')
+    for r in sorted(rows,key=lambda x:-float(x["app_cpu_avg_m"])):
+        h.append(f'<tr><td>{r["service"]}</td><td>{fmt_cpu(r["app_cpu_avg_m"])}</td><td>{fmt_cpu(r["app_cpu_peak_m"])}</td>'
+                 f'<td>{fmt_cpu(r["sidecar_cpu_avg_m"])}</td><td>{fmt_cpu(r["sidecar_cpu_peak_m"])}</td>'
+                 f'<td>{r["sidecar_pct"]}%</td></tr>')
+    h.append('</table></div>')
     return "".join(h)
 
 def section_load_alloc(infra, before):
@@ -602,8 +630,17 @@ def build_verdict(before, after, infra, app):
                 _b=next((r for r in read_csv(os.path.join(before,"capacity_by_class.csv")) if r["class"]=="app-worker"),{})
                 _res=float(_b.get("reserved_cores",0) or 0)
             except: pass
-            risk=(f" Across the window the app services actually used <b>{cpu_avg:.1f} cores</b> CPU on average "
-                  f"(<b>{cpu_pk:.1f} cores</b> at peak) and <b>{mem_pk:.0f} GB</b> memory at peak.")
+            aw=read_kv(os.path.join(infra,"active_window.txt")) if infra else {}
+            _scope="the load window"
+            _tail=""
+            try:
+                _act=int(aw.get("active_samples",0)); _tot=int(aw.get("total_samples",0))
+                if _act and _tot and _act<_tot:
+                    _tail=(f" The capture ran for {_tot} samples but load was only active for {_act} of them; "
+                           f"averages below cover the active load period only.")
+            except: pass
+            risk=(f" Across {_scope} the app services actually used <b>{cpu_avg:.1f} cores</b> CPU on average "
+                  f"(<b>{cpu_pk:.1f} cores</b> at peak) and <b>{mem_pk:.0f} GB</b> memory at peak."+_tail)
             # be explicit when the window was idle — otherwise the numbers look wrong
             if _res and cpu_pk < _res*0.10:
                 risk+=(" CPU use is far below the reserved figure, so this window was near-idle — "
@@ -671,6 +708,7 @@ def build(a):
     H.append(band("B · Resource Usage During Load","How hard did everything actually work?"))
     H.append('<span id="s3"></span>'+section_trends(a.infra))
     H.append('<span id="s4"></span>'+section_utilization(a.infra))
+    H.append(section_container_split(a.infra))
     H.append(section_load_alloc(a.infra,a.before))
     H.append('<span id="s5"></span>'+section_nodes(a.before,a.after,a.infra))
 

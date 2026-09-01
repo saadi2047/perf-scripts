@@ -57,6 +57,7 @@ echo "[*] out: $OUTDIR"
 echo "sample,ts,namespace,pod,cpu_m,mem_mi" > "$OUTDIR/pod_usage.csv"
 echo "sample,ts,namespace,pod,restarts,status" > "$OUTDIR/pod_status.csv"
 echo "sample,ts,namespace,pod,node,ip" > "$OUTDIR/pod_placement.csv"
+echo "sample,ts,namespace,pod,container,cpu_m,mem_mi" > "$OUTDIR/container_usage.csv"
 echo "sample,ts,namespace,pod,restart_count,reason,exit_code" > "$OUTDIR/restart_reasons.csv"
 echo "sample,ts,namespace,pod,phase,created,scheduled,ready,spinup_s" > "$OUTDIR/pod_spinup.csv"
 echo "sample,ts,namespace,hpa,min,max,current,desired,target_metric" > "$OUTDIR/hpa_timeline.csv"
@@ -105,6 +106,16 @@ PYHPA
   for ns in $NAMESPACES; do
     # --- CPU/mem via adm top ---
     oc -n "$ns" adm top pods --no-headers 2>/dev/null > "$sdir/top_${ns}.txt"
+    # per-container split (app vs istio-proxy sidecar) — lets the report show app-only CPU,
+    # which is what Dynatrace's per-container view reports.
+    oc -n "$ns" adm top pods --containers --no-headers 2>/dev/null > "$sdir/topc_${ns}.txt"
+    if [ -s "$sdir/topc_${ns}.txt" ]; then
+      while read -r pod cont cpu mem _rest; do
+        [ -z "$cont" ] && continue
+        cc=$(echo "$cpu" | sed 's/m//'); cm=$(echo "$mem" | sed 's/Mi//')
+        echo "$i,$now,$ns,$pod,$cont,${cc:-0},${cm:-0}" >> "$OUTDIR/container_usage.csv"
+      done < "$sdir/topc_${ns}.txt"
+    fi
     while read -r pod cpu mem _rest; do
       [ -z "$pod" ] && continue
       cpu_m=$(echo "$cpu" | sed 's/m//')

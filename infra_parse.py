@@ -229,13 +229,46 @@ for r in usage_rows:
     svc=_svc(r["pod"]); svc_sample_cpu[svc][s]+=cpu; svc_sample_mem[svc][s]+=mem
     sample_ts[s]=r["ts"]
 
+# ---- ACTIVE LOAD WINDOW DETECTION ----
+# If the capture ran longer than the load (load cancelled/finished early), the idle
+# tail drags every average down. Detect the samples where load was actually running
+# and average over those, so the numbers describe the load, not the dead air.
+_INFRA_SVC=("kafka","istio","tempo","zookeeper","otel","generate-traces","istiod")
+_tot_by_sample=_dd(float)
+for _svcname, _ser in svc_sample_cpu.items():
+    if any(k in _svcname.lower() for k in _INFRA_SVC): continue
+    for _s,_v in _ser.items(): _tot_by_sample[_s]+=_v
+_active=set(_tot_by_sample.keys())
+_load_note=""
+if _tot_by_sample:
+    _pk=max(_tot_by_sample.values())
+    if _pk>0:
+        # "active" = at least 20% of peak app CPU; anything less is idle/ramp
+        _act=sorted(s for s,v in _tot_by_sample.items() if v >= 0.20*_pk)
+        if _act and len(_act) < len(_tot_by_sample):
+            _active=set(_act)
+            _skipped=len(_tot_by_sample)-len(_act)
+            _load_note=(f"active_samples={len(_act)} of {len(_tot_by_sample)}; "
+                        f"{_skipped} idle sample(s) excluded from averages")
+with open(_os.path.join(_out,"active_window.txt"),"w") as f:
+    if _active:
+        _a=sorted(_active)
+        f.write(f"first_active_sample={_a[0]}\nlast_active_sample={_a[-1]}\n")
+        f.write(f"active_samples={len(_a)}\ntotal_samples={len(_tot_by_sample)}\n")
+        if _a and sample_ts:
+            f.write(f"active_start={sample_ts.get(_a[0],'')}\nactive_end={sample_ts.get(_a[-1],'')}\n")
+        if _load_note: f.write(f"note={_load_note}\n")
+
 with open(_os.path.join(_out,"utilization_summary.csv"),"w") as f:
     f.write("service,cpu_avg_m,cpu_peak_m,cpu_peak_ts,mem_avg_mi,mem_peak_mi,mem_peak_ts\n")
     for svc in sorted(svc_sample_cpu):
         cser=svc_sample_cpu[svc]; mser=svc_sample_mem[svc]
-        cavg=sum(cser.values())/len(cser) if cser else 0
+        # average over the ACTIVE load window only (peak still uses the full run)
+        _ca={s:v for s,v in cser.items() if s in _active} or cser
+        _ma={s:v for s,v in mser.items() if s in _active} or mser
+        cavg=sum(_ca.values())/len(_ca) if _ca else 0
         cpk_s=max(cser,key=cser.get) if cser else 0; cpk=cser.get(cpk_s,0)
-        mavg=sum(mser.values())/len(mser) if mser else 0
+        mavg=sum(_ma.values())/len(_ma) if _ma else 0
         mpk_s=max(mser,key=mser.get) if mser else 0; mpk=mser.get(mpk_s,0)
         f.write(f"{svc},{cavg:.0f},{cpk:.0f},{_ts_short(sample_ts.get(cpk_s,''))},{mavg:.0f},{mpk:.0f},{_ts_short(sample_ts.get(mpk_s,''))}\n")
 
@@ -377,3 +410,32 @@ if _os.path.exists(pf):
                 rows.append((ns_of.get(pod,""),pod,lv,rd,st,lv+rd+st))
             for r in sorted(rows,key=lambda x:-x[5]):
                 f.write(f"{r[0]},{r[1]},{r[2]},{r[3]},{r[4]},{r[5]}\n")
+
+# ---- 7. App-container vs sidecar CPU split ----
+# `oc adm top pods` reports the WHOLE pod (app + istio-proxy). Dynatrace's per-container
+# view reports the app container only. Splitting them lets the two sources reconcile.
+cu=_os.path.join(_out,"container_usage.csv")
+if _os.path.exists(cu):
+    SIDE=("istio-proxy","istio-init","linkerd-proxy","envoy")
+    svc_app=_dd(lambda:_dd(float)); svc_side=_dd(lambda:_dd(float))
+    for r in _csv.DictReader(open(cu)):
+        try:
+            s=int(r["sample"]); c=float(r["cpu_m"] or 0)
+        except: continue
+        svc=_svc(r["pod"])
+        if r.get("container","").lower() in SIDE: svc_side[svc][s]+=c
+        else: svc_app[svc][s]+=c
+    if svc_app:
+        with open(_os.path.join(_out,"container_split.csv"),"w") as f:
+            f.write("service,app_cpu_avg_m,app_cpu_peak_m,sidecar_cpu_avg_m,sidecar_cpu_peak_m,sidecar_pct\n")
+            for svc in sorted(svc_app):
+                a=svc_app[svc]; sd=svc_side.get(svc,{})
+                # restrict to the active load window when we detected one
+                _aa={k:v for k,v in a.items() if k in _active} or a
+                _ss={k:v for k,v in sd.items() if k in _active} or sd
+                aavg=sum(_aa.values())/len(_aa) if _aa else 0
+                apk=max(a.values()) if a else 0
+                savg=sum(_ss.values())/len(_ss) if _ss else 0
+                spk=max(sd.values()) if sd else 0
+                pct=(100.0*savg/(aavg+savg)) if (aavg+savg)>0 else 0
+                f.write(f"{svc},{aavg:.0f},{apk:.0f},{savg:.0f},{spk:.0f},{pct:.0f}\n")

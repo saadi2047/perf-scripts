@@ -24,6 +24,7 @@ count() { c=$(grep -cE "$1" "$2" 2>/dev/null); c=$(printf '%s' "$c" | tr -d ' \n
 
 INTERVAL=60
 DURATION=3600
+DEEP_EVERY=3        # run the expensive JSON/event captures every Nth sample (1 = every sample)
 OUTBASE="."
 SAMPLES=""
 NAMESPACES="perf-transaction perf-admin perf-kms perf-merchant perf-simulators perf-notification perf-epay-common perf-frontend perf-istio-system perf-kafka perf-tempo"

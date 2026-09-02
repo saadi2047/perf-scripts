@@ -42,6 +42,9 @@ while [ $# -gt 0 ]; do
 done
 
 [ -z "$SAMPLES" ] && SAMPLES=$(( DURATION / INTERVAL ))
+# Hard wall-clock deadline — the run never exceeds the requested duration.
+START_EPOCH=$(date +%s)
+DEADLINE=$(( START_EPOCH + DURATION ))
 
 command -v oc >/dev/null 2>&1 || { echo "FATAL: oc not found"; exit 1; }
 command -v python3 >/dev/null 2>&1 || { echo "FATAL: python3 not found"; exit 1; }
@@ -58,6 +61,7 @@ echo "[*] out: $OUTDIR"
 echo "sample,ts,namespace,pod,cpu_m,mem_mi" > "$OUTDIR/pod_usage.csv"
 echo "sample,ts,namespace,pod,restarts,status" > "$OUTDIR/pod_status.csv"
 echo "sample,ts,namespace,pod,node,ip" > "$OUTDIR/pod_placement.csv"
+echo "sample,ts,namespace,pod,message" > "$OUTDIR/pending_events.csv"
 echo "sample,ts,namespace,pod,container,cpu_m,mem_mi" > "$OUTDIR/container_usage.csv"
 echo "sample,ts,namespace,pod,restart_count,reason,exit_code" > "$OUTDIR/restart_reasons.csv"
 echo "sample,ts,namespace,pod,phase,created,scheduled,ready,spinup_s" > "$OUTDIR/pod_spinup.csv"
@@ -71,6 +75,10 @@ for ns in $NAMESPACES; do NSFLAG="$NSFLAG -n $ns"; done
 
 i=0
 while [ "$i" -lt "$SAMPLES" ]; do
+  if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+    echo "[*] duration limit reached (${DURATION}s) after $i sample(s) — stopping on schedule."
+    break
+  fi
   i=$((i+1))
   cyc_start=$(date +%s)
   now=$(date -u +%FT%TZ)
@@ -200,6 +208,16 @@ PYJSON
 
     # --- scheduler events (this cycle) split by reason ---
     oc -n "$ns" get events --field-selector reason=FailedScheduling --no-headers 2>/dev/null > "$sdir/sched_${ns}.txt"
+    # per-pod FailedScheduling message (the WHY a pod is Pending)
+    if [ -s "$sdir/sched_${ns}.txt" ]; then
+      awk -v s="$i" -v t="$now" -v n="$ns" '
+        { pod="";
+          for(f=1;f<=NF;f++) if($f ~ /^pod\//){ pod=$f; sub(/^pod\//,"",pod) }
+          msg=""; k=index($0,"0/"); if(k>0) msg=substr($0,k);
+          gsub(/,/,";",msg); gsub(/\r/,"",msg);
+          if(pod!="" && msg!="") print s","t","n","pod","msg
+        }' "$sdir/sched_${ns}.txt" >> "$OUTDIR/pending_events.csv"
+    fi
     if [ -s "$sdir/sched_${ns}.txt" ]; then
       # bucket by the reason substring
       ins=$(count 'Insufficient cpu' "$sdir/sched_${ns}.txt")
@@ -222,7 +240,12 @@ PYJSON
   if [ "$took" -ge "$INTERVAL" ]; then
     echo "    [!] WARN: cycle took ${took}s >= interval ${INTERVAL}s (no sleep; next starts immediately)"
   else
-    [ "$i" -lt "$SAMPLES" ] && sleep $((INTERVAL - took))
+    if [ "$i" -lt "$SAMPLES" ]; then
+      _rem=$(( DEADLINE - $(date +%s) ))
+      _nap=$(( INTERVAL - took ))
+      [ "$_nap" -gt "$_rem" ] && _nap="$_rem"
+      [ "$_nap" -gt 0 ] && sleep "$_nap"
+    fi
   fi
 done
 

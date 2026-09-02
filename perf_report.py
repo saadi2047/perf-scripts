@@ -276,14 +276,27 @@ def section_nodes(before, after, infra):
         h.append(li(f'Average CPU across app-worker nodes during load: {avgall:.1f}%.'))
         h.append('</ul>')
     # table: node | before% | during avg% | during peak% | after%  (cpu then mem)
-    h.append('<table><tr><th>Node</th><th>CPU before</th><th>CPU avg (load)</th><th>CPU peak (load)</th><th>CPU after</th><th>Mem avg (load)</th></tr>')
+    def _cp(cores_m, pct):
+        """render as '2.4c (15%)' — cores first, percent for context."""
+        try:
+            c=float(cores_m)/1000.0
+            cs=f"{c:.1f}c"
+        except: cs="–"
+        p=f"{pct}%" if pct not in (None,"","–") else "–"
+        if cs=="–": return p
+        return f'{cs} <span class="muted">({p})</span>'
+    h.append('<div class="tbl-wrap"><table><tr><th>Node</th><th>CPU before</th><th>CPU avg (load)</th>'
+             '<th>CPU peak (load)</th><th>CPU after</th><th>Mem avg (load)</th></tr>')
     for n in nodes:
         short=n.split(".")[0]
         b=bu.get(n,{}); a=au.get(n,{}); d=du.get(n,{})
-        h.append(f'<tr><td>{short}</td><td>{b.get("cpu_pct","–")}%</td>'
-                 f'<td>{d.get("cpu_pct_avg","–")}%</td><td>{d.get("cpu_pct_peak","–")}%</td>'
-                 f'<td>{a.get("cpu_pct","–")}%</td><td>{d.get("mem_pct_avg","–")}%</td></tr>')
-    h.append('</table>')
+        h.append(f'<tr><td>{short}</td>'
+                 f'<td>{_cp(b.get("cpu_used_m"), b.get("cpu_pct","–"))}</td>'
+                 f'<td>{_cp(d.get("cpu_m_avg"),  d.get("cpu_pct_avg","–"))}</td>'
+                 f'<td>{_cp(d.get("cpu_m_peak"), d.get("cpu_pct_peak","–"))}</td>'
+                 f'<td>{_cp(a.get("cpu_used_m"), a.get("cpu_pct","–"))}</td>'
+                 f'<td>{d.get("mem_pct_avg","–")}%</td></tr>')
+    h.append('</table></div>')
     h.append('<p class="muted">Before/after are point-in-time snapshots; load columns are averaged/peaked across the run.</p>')
     return "".join(h)
 
@@ -606,10 +619,12 @@ def section_distribution(infra):
             else:
                 h.append(f'<tr><td{muted}>{r["namespace"]}{tag}</td><td{muted}>{r["pods_before"]}</td><td{muted}>{r["pods_peak"]}</td><td{muted}>{r["pods_after"]}</td></tr>')
         # node total row
-        h.append(f'<tr style="border-top:2px solid var(--accent)"><td style="font-weight:600">TOTAL</td>'
-                 f'<td style="font-weight:600">{t.get("pods_before","–")}</td>'
-                 f'<td style="font-weight:600">{t.get("pods_peak","–")}</td>'
-                 f'<td style="font-weight:600">{t.get("pods_after","–")}</td></tr>')
+        _ts='font-weight:700;color:var(--accent);background:#eaf2fb'
+        h.append(f'<tr style="border-top:2px solid var(--accent)">'
+                 f'<td style="{_ts}">TOTAL</td>'
+                 f'<td style="{_ts}">{t.get("pods_before","–")}</td>'
+                 f'<td style="{_ts}">{t.get("pods_peak","–")}</td>'
+                 f'<td style="{_ts}">{t.get("pods_after","–")}</td></tr>')
     h.append('</table></div>')
     return "".join(h)
 

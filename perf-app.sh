@@ -42,6 +42,11 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -z "$SAMPLES" ] && SAMPLES=$(( DURATION / INTERVAL ))
+# Hard wall-clock deadline: the run must never exceed the requested duration, even if
+# individual cycles run slow (which happens under load). Sample count is the target;
+# this is the ceiling.
+START_EPOCH=$(date +%s)
+DEADLINE=$(( START_EPOCH + DURATION ))
 
 command -v oc >/dev/null 2>&1 || { echo "FATAL: oc not found"; exit 1; }
 command -v python3 >/dev/null 2>&1 || { echo "FATAL: python3 not found"; exit 1; }
@@ -62,6 +67,10 @@ SINCE="90s"
 
 i=0
 while [ "$i" -lt "$SAMPLES" ]; do
+  if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+    echo "[*] duration limit reached (${DURATION}s) after $i sample(s) — stopping on schedule."
+    break
+  fi
   i=$((i+1))
   cyc_start=$(date +%s)
   now=$(date -u +%FT%TZ)
@@ -98,7 +107,12 @@ while [ "$i" -lt "$SAMPLES" ]; do
   if [ "$took" -ge "$INTERVAL" ]; then
     echo "    [!] WARN: cycle ${took}s >= interval ${INTERVAL}s"
   else
-    [ "$i" -lt "$SAMPLES" ] && sleep $((INTERVAL - took))
+    if [ "$i" -lt "$SAMPLES" ]; then
+      _rem=$(( DEADLINE - $(date +%s) ))
+      _nap=$(( INTERVAL - took ))
+      [ "$_nap" -gt "$_rem" ] && _nap="$_rem"
+      [ "$_nap" -gt 0 ] && sleep "$_nap"
+    fi
   fi
 done
 

@@ -439,3 +439,39 @@ if _os.path.exists(cu):
                 spk=max(sd.values()) if sd else 0
                 pct=(100.0*savg/(aavg+savg)) if (aavg+savg)>0 else 0
                 f.write(f"{svc},{aavg:.0f},{apk:.0f},{savg:.0f},{spk:.0f},{pct:.0f}\n")
+
+# ---- 8. Pending pods DURING the run (not just at the before/after snapshots) ----
+# The capacity snapshots only see pods Pending at that instant. Under load, HPA-created
+# pods can sit Pending for most of the run and never appear in either snapshot. This
+# reconstructs the full picture from the per-sample pod_status capture.
+ps=_os.path.join(_out,"pod_status.csv")
+if _os.path.exists(ps):
+    _pend=_dd(set); _ns={}; _ts={}
+    _allsamples=set()
+    for r in _csv.DictReader(open(ps)):
+        try: s=int(r["sample"])
+        except: continue
+        _allsamples.add(s); _ts[s]=r.get("ts","")
+        if "Pending" in (r.get("status") or ""):
+            _pend[r["pod"]].add(s); _ns[r["pod"]]=r.get("namespace","")
+    if _pend:
+        _last=max(_allsamples) if _allsamples else 0
+        with open(_os.path.join(_out,"pending_during_run.csv"),"w") as f:
+            f.write("namespace,pod,pending_samples,first_sample,last_sample,"
+                    "first_seen_ist,last_seen_ist,still_pending_at_end\n")
+            rows=sorted(_pend.items(), key=lambda x:-len(x[1]))
+            for pod,ss in rows:
+                a,b=min(ss),max(ss)
+                still="YES" if b==_last else "no"
+                f.write(f"{_ns.get(pod,'')},{pod},{len(ss)},{a},{b},"
+                        f"{_ts_short(_ts.get(a,''))},{_ts_short(_ts.get(b,''))},{still}\n")
+        # per-namespace roll-up
+        _byns=_dd(lambda: [0,0,0])   # ns -> [pods, total_pending_samples, never_scheduled]
+        for pod,ss in _pend.items():
+            n=_ns.get(pod,"")
+            _byns[n][0]+=1; _byns[n][1]+=len(ss)
+            if max(ss)==_last: _byns[n][2]+=1
+        with open(_os.path.join(_out,"pending_by_namespace.csv"),"w") as f:
+            f.write("namespace,pods_pending,pending_pod_samples,never_scheduled\n")
+            for n,(c,tot,never) in sorted(_byns.items(), key=lambda x:-x[1][1]):
+                f.write(f"{n},{c},{tot},{never}\n")

@@ -461,6 +461,74 @@ def section_load_alloc(infra, before):
     h.append('</table></div>')
     return "".join(h)
 
+def section_pending(before, after, infra):
+    """Every pod that could not be scheduled at any point during the run."""
+    dur=read_csv(os.path.join(infra,"pending_during_run.csv")) if infra else []
+    byns=read_csv(os.path.join(infra,"pending_by_namespace.csv")) if infra else []
+    ev=read_csv(os.path.join(infra,"pending_events.csv")) if infra else []
+    bp=read_csv(os.path.join(before,"pending_pods.csv")) if before else []
+    ap=read_csv(os.path.join(after,"pending_pods.csv")) if after else []
+    if not dur and not ap and not bp: return ""
+    INFRA_POD=("grafana","tempo","otel","collector","prometheus","loki","quay","operator",
+               "alertmanager","exporter","zookeeper","istiod","istio")
+    reason={}; ns_reason={}
+    for r in ev:
+        p=r.get("pod",""); m=r.get("message","")
+        if p: reason[p]=m
+        if r.get("namespace") and m: ns_reason[r["namespace"]]=m
+    h=['<h2>11 · Pods that could not be scheduled</h2>']
+    h.append('<p class="muted">Every pod seen <b>Pending at any point during the run</b> — not just at the '
+             'before/after snapshots. A pod stuck Pending is capacity the load asked for and never received.</p>')
+    if not dur:
+        h.append('<p class="muted">No pods were Pending during the run.</p>')
+        return "".join(h)
+    app=[r for r in dur if not any(k in r["pod"].lower() for k in INFRA_POD)]
+    inf=[r for r in dur if r not in app]
+    never=[r for r in app if r.get("still_pending_at_end")=="YES"]
+    lost=sum(int(r.get("pending_samples") or 0) for r in app)
+    if app:
+        msg=(f'<b>{len(app)} app-service pod(s)</b> were Pending during this run; '
+             f'<b>{len(never)}</b> were still unscheduled when the run ended. '
+             f'Together they spent <b>{lost} pod-samples</b> waiting for a node.')
+        h.append(f'<div class="banner bad">{msg}</div>')
+    # namespace roll-up
+    appns=[r for r in byns if r["namespace"].startswith("perf-") and r["namespace"]!="perf-epay-common"]
+    if appns:
+        h.append('<h3>By namespace</h3><div class="tbl-wrap"><table>'
+                 '<tr><th>Namespace</th><th>Pods pending</th><th>Pod-samples waiting</th><th>Never scheduled</th></tr>')
+        for r in appns:
+            nv=r.get("never_scheduled","0")
+            cls=' style="color:var(--bad);font-weight:600"' if nv not in ("0","") else ''
+            h.append(f'<tr><td>{r["namespace"]}</td><td>{r["pods_pending"]}</td>'
+                     f'<td>{r["pending_pod_samples"]}</td><td{cls}>{nv}</td></tr>')
+        h.append('</table></div>')
+    def _tbl(rws):
+        o=['<div class="tbl-wrap"><table><tr><th>Namespace</th><th>Pod</th><th>Pending for</th>'
+           '<th>Window (IST)</th><th>Still pending at end</th></tr>']
+        for r in rws:
+            nv=r.get("still_pending_at_end","no")
+            cls=' style="color:var(--bad);font-weight:600"' if nv=="YES" else ''
+            o.append(f'<tr><td>{r["namespace"]}</td><td class="pod-mono">{r["pod"]}</td>'
+                     f'<td>{r["pending_samples"]} sample(s)</td>'
+                     f'<td class="muted">{r.get("first_seen_ist","")} → {r.get("last_seen_ist","")}</td>'
+                     f'<td{cls}>{nv}</td></tr>')
+        o.append('</table></div>')
+        return "".join(o)
+    h.append('<h3>Per pod</h3>')
+    h.append(_tbl(app))
+    # scheduler reason
+    anyreason=""
+    for r in app:
+        anyreason=reason.get(r["pod"]) or ns_reason.get(r["namespace"],"")
+        if anyreason: break
+    if anyreason:
+        h.append('<h3>Scheduler reason</h3>')
+        h.append(f'<ul class="findings"><li class="bad">{anyreason}</li></ul>')
+    if inf:
+        h.append(f'<details><summary>Platform/infra pods Pending — {len(inf)} (not app services)</summary>'
+                 +_tbl(inf)+'</details>')
+    return "".join(h)
+
 def section_probes(infra):
     rows=read_csv(os.path.join(infra,"probe_summary.csv")) if infra else []
     if not rows: return ""
@@ -721,6 +789,7 @@ def build(a):
     # GROUP D — Placement & Scheduling
     H.append(band("D · Placement &amp; Scheduling","Where did pods land across the nodes?"))
     H.append('<span id="s8"></span>'+section_distribution(a.infra))
+    H.append('<span id="s11"></span>'+section_pending(a.before,a.after,a.infra))
 
     # GROUP E — Health & Failures
     H.append(band("E · Health &amp; Failures","What broke during the run, and why?"))

@@ -287,7 +287,9 @@ if _os.path.exists(rr):
         for (ns,pod),(rc,reason,ec) in sorted(worst.items(),key=lambda x:-x[1][0]):
             interp=""
             e=str(ec)
-            if reason=="OOMKilled" or e=="137": interp="OOMKilled / SIGKILL — container exceeded its memory limit"
+            if reason=="OOMKilled": interp="OOMKilled — container exceeded its memory limit"
+            elif e=="137": interp=("SIGKILL — container did not exit within its grace period after "
+                                   "SIGTERM (usually a liveness-probe kill that hung); not an OOM unless reason=OOMKilled")
             elif e=="143": interp="SIGTERM — killed by liveness probe or graceful stop"
             elif e=="1": interp="Application exited with error (exit 1) — check the pod logs for the stack trace"
             elif e=="2": interp="Shell/command misuse (exit 2)"

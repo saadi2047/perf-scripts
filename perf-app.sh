@@ -28,7 +28,7 @@ SAMPLES=""
 # Add them with -n if you ever need them.
 NAMESPACES="perf-transaction perf-admin perf-kms perf-merchant perf-simulators perf-notification perf-epay-common perf-frontend"
 # grep pattern for signal lines (case-insensitive)
-PATTERN='ERROR|WARN|Exception|Caused by|\tat |FATAL|OutOfMemory|GC pause|Pause Young|Pause Full|Full GC|503|Service Unavailable|connection is not available|Connection is not available|HikariPool|timeout|Timeout|refused|Unable to acquire|deadlock'
+PATTERN='ERROR|WARN|Exception|Caused by|\tat |FATAL|OutOfMemory|GC pause|Pause Young|Pause Full|Full GC|HTTP/[0-9.]+" 503|status[=: ]*503|statusCode[=: ]*503|503 Service Unavailable|SERVICE_UNAVAILABLE|ServiceUnavailable|connection is not available|Connection is not available|HikariPool|timeout|Timeout|refused|Unable to acquire|deadlock'
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -93,7 +93,9 @@ while [ "$i" -lt "$SAMPLES" ]; do
       x=$(scount "$chunk" 'Exception|Caused by|OutOfMemory')
       g=$(scount "$chunk" 'GC pause|Pause Young|Pause Full|Full GC')
       c=$(scount "$chunk" 'HikariPool|connection is not available|Unable to acquire|deadlock')
-      h=$(scount "$chunk" '503|Service Unavailable')
+      # precise: a bare "503" matches postal codes, IDs and timestamps.
+      # Require an HTTP context.
+      h=$(scount "$chunk" 'HTTP/[0-9.]+" 503|status[=: ]*503|statusCode[=: ]*503|503 Service Unavailable|SERVICE_UNAVAILABLE|ServiceUnavailable')
       : "${e:=0}" "${w:=0}" "${x:=0}" "${g:=0}" "${c:=0}" "${h:=0}"
       tot=$((e+w+x+g+c+h))
       [ "$tot" -gt 0 ] && echo "$i,$now,$ns,$pod,$e,$w,$x,$g,$c,$h" >> "$OUTDIR/log_signal_counts.csv"

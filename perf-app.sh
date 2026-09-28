@@ -65,6 +65,8 @@ echo "sample,ts,namespace,pod,errors,warns,exceptions,gc,conn_pool,http503" > "$
 # since-marker: first cycle pulls last 90s; later cycles pull since last cycle time
 SINCE="90s"
 
+APPSTATE="$OUTDIR/.nsstate"; mkdir -p "$APPSTATE"
+
 i=0
 while [ "$i" -lt "$SAMPLES" ]; do
   if [ "$(date +%s)" -ge "$DEADLINE" ]; then
@@ -78,8 +80,18 @@ while [ "$i" -lt "$SAMPLES" ]; do
 
   for ns in $NAMESPACES; do
     pods=$(oc -n "$ns" get pods --no-headers 2>/dev/null | awk '$3=="Running"{print $1}')
+    # A namespace with nothing deployed is normal and stays quiet. Only warn when a
+    # namespace that HAS been returning pods suddenly returns none — that is a real
+    # loss of visibility (expired session, API trouble), not an empty namespace.
     if [ -z "$pods" ]; then
-      echo "    [!] $ns: no Running pods returned — namespace empty, or the oc session expired"
+      if [ -f "$APPSTATE/seen_$ns" ]; then
+        echo "    [!] $ns: pods disappeared from the listing (session expired, or API trouble)"
+      else
+        : > "$APPSTATE/empty_$ns"
+      fi
+    else
+      : > "$APPSTATE/seen_$ns"
+      rm -f "$APPSTATE/empty_$ns"
     fi
     for pod in $pods; do
       # incremental pull, app container auto-detected (skip istio-proxy)
@@ -120,6 +132,14 @@ while [ "$i" -lt "$SAMPLES" ]; do
     fi
   fi
 done
+
+_empty=""
+for f in "$APPSTATE"/empty_*; do
+  [ -e "$f" ] || continue
+  _empty="$_empty $(basename "$f" | sed 's/^empty_//')"
+done
+rm -rf "$APPSTATE"
+[ -n "$_empty" ] && echo "[*] no pods deployed in —${_empty} (skipped, not an error)"
 
 echo "[*] parsing log signals..."
 SCRIPT_DIR=$(dirname "$0")

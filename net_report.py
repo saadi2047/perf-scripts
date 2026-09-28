@@ -336,23 +336,59 @@ class Window:
         self.duration = F(t[-1].get("elapsed_s")) if t else 0.0
         self.total = F(t[-1].get("total_since_start")) if t else 0.0
         self.avg_rps = (self.total / self.duration) if self.duration else 0.0
-        self.rate_pts = [(F(r.get("elapsed_s")), F(r.get("rate_rps"))) for r in t]
+        # Derive every rate from the cumulative counter rather than the collector's
+        # rate column. The counter is ground truth: a difference of two readings over
+        # the measured gap between them. A collector that mis-times its cycle can
+        # misstate rate_rps but cannot misstate the counter, so all rates are rebuilt.
+        pairs = []          # (elapsed, gap, delta)
+        _pe, _pt = 0.0, 0.0
+        for r in t:
+            _e = F(r.get("elapsed_s")); _tt = F(r.get("total_since_start"))
+            _g = _e - _pe
+            if _g > 0:
+                pairs.append((_e, _g, max(0.0, _tt - _pt)))
+            _pe, _pt = _e, _tt
+        # A collector that stamped elapsed_s at the START of a cycle rather than at
+        # the counter read leaves the FIRST gap short by the cycle's work time; every
+        # later gap is correct because the offset is constant and cancels. Detect that
+        # and drop the first point rather than publish a rate inflated by it.
+        self.dropped_first = False
+        if len(pairs) >= 4:
+            later = sorted(p[1] for p in pairs[1:])
+            med = later[len(later) // 2]
+            if med > 0 and pairs[0][1] < 0.6 * med:
+                pairs = pairs[1:]
+                self.dropped_first = True
+        self.rate_pts = [(e, d / g) for e, g, d in pairs]
+        self.rate_derived = True
+        if not self.rate_pts or all(y == 0 for _, y in self.rate_pts):
+            self.rate_pts = [(F(r.get("elapsed_s")), F(r.get("rate_rps"))) for r in t]
+            self.rate_derived = False
+            self.dropped_first = False
+        _rate_at = dict(self.rate_pts)
         self.cum_pts = [(F(r.get("elapsed_s")), F(r.get("total_since_start"))) for r in t]
+        # cycle cadence actually achieved = median gap between counter reads
         self.interval = 0.0
-        if len(self.rate_pts) > 1:
-            d = [b[0] - a[0] for a, b in zip(self.rate_pts, self.rate_pts[1:]) if b[0] > a[0]]
-            if d:
-                self.interval = sorted(d)[len(d) // 2]
+        _gaps = sorted(g for _, g, _ in pairs) if pairs else []
+        if _gaps:
+            self.interval = _gaps[len(_gaps) // 2]
         self.peak_rps = max((y for _, y in self.rate_pts), default=0.0)
         self.peak_at = ""
         for r in t:
-            if abs(F(r.get("rate_rps")) - self.peak_rps) < 1e-9:
+            _e = F(r.get("elapsed_s"))
+            if _e in _rate_at and abs(_rate_at[_e] - self.peak_rps) < 1e-9:
                 self.peak_at = r["ts_ist"]
                 break
-        # steady state = samples at >= 70% of peak, first sample excluded (cold)
-        thr = 0.70 * self.peak_rps
-        st = [(F(r.get("elapsed_s")), F(r.get("rate_rps")), r["ts_ist"])
-              for r in t if F(r.get("rate_rps")) >= thr]
+        # Steady state is anchored on the MEDIAN rate, not the peak. A single spike
+        # at the end of a window drags a percent-of-peak threshold so high that the
+        # genuinely steady samples fall below it, and the "steady-state" figure then
+        # reports the spike. The median is unmoved by one outlier.
+        _rs = sorted(y for _, y in self.rate_pts)
+        self.median_rps = _rs[len(_rs) // 2] if _rs else 0.0
+        thr = 0.70 * self.median_rps
+        st = [(F(r.get("elapsed_s")), _rate_at[F(r.get("elapsed_s"))], r["ts_ist"])
+              for r in t
+              if F(r.get("elapsed_s")) in _rate_at and _rate_at[F(r.get("elapsed_s"))] >= thr]
         self.steady_n = len(st)
         self.steady_avg = (sum(x[1] for x in st) / len(st)) if st else 0.0
         self.steady_from = st[0][2] if st else ""
@@ -463,9 +499,9 @@ def sec_window(w):
     h.append(kpi("Average rate", f1(w.avg_rps, " req/s"), "",
                  f"over the whole {f1(w.duration/60)} min"))
     h.append(kpi("Steady-state rate", f1(w.steady_avg, " req/s"), "",
-                 f"{w.steady_n} samples ≥70% of peak"))
+                 f"mean of {w.steady_n} sample{'' if w.steady_n == 1 else 's'} within 30% of the median"))
     h.append(kpi("Peak rate", f1(w.peak_rps, " req/s"), "",
-                 f"at {short_ts(w.peak_at)} IST"))
+                 f"highest single interval, at {short_ts(w.peak_at)} IST"))
     h.append(kpi("Duration", f"{f1(w.duration/60)} min", "",
                  f"{w.samples} samples @ {f1(w.interval)}s"))
     h.append(kpi("Window (IST)", short_ts(w.start) + " → " + short_ts(w.end), "sm",
@@ -473,6 +509,15 @@ def sec_window(w):
     h.append("</div>")
 
     h.append('<h3>Request rate across the window</h3>')
+    if getattr(w, "rate_derived", False):
+        _n = ('<p class="muted">Rates are recomputed here from the gateway counter — each point is the '
+              'difference between two readings divided by the measured gap between them — so they do not '
+              'depend on the collector\'s own timing.')
+        if getattr(w, "dropped_first", False):
+            _n += (' The first sample was excluded: its recorded gap is far shorter than every later one, '
+                   'which means the capture stamped the time before reading the counter. The window total '
+                   'is unaffected.')
+        h.append(_n + '</p>')
     h.append('<div class="chart">' +
              svg_chart([{"name": "req/s", "color": S1,
                          "pts": w.rate_pts, "area": True}],
@@ -484,7 +529,9 @@ def sec_window(w):
         ("Ramp-up", f"0 → {f1(w.ramp_up_s)}s",
          f"{f1(w.ramp_up_s/60)} min", "rate climbing to within 30% of peak"),
         ("Steady state", f"{short_ts(w.steady_from)} → {short_ts(w.steady_to)}",
-         f"{f1(w.steady_secs/60)} min", f"average {f1(w.steady_avg)} req/s — <b>use this for capacity maths</b>"),
+         f"{f1(w.steady_secs/60)} min",
+         f"average {f1(w.steady_avg)} req/s across {w.steady_n} sample"
+         f"{'' if w.steady_n == 1 else 's'} — <b>use this for capacity maths</b>"),
         ("Ramp-down", f"last {f1(w.ramp_dn_s)}s",
          f"{f1(w.ramp_dn_s/60)} min", "rate falling away after JMeter stops"),
     ]
@@ -795,6 +842,7 @@ def sec_compare(wins):
         ("OCP received", lambda w: n0(w.total)),
         ("Average req/s", lambda w: f1(w.avg_rps)),
         ("Steady-state req/s", lambda w: f1(w.steady_avg)),
+        ("Median req/s", lambda w: f1(getattr(w, "median_rps", 0))),
         ("Peak req/s", lambda w: f1(w.peak_rps)),
         ("Delivered to pods", lambda w: n0(w.node_fg)),
         ("Gateway↔pods gap", lambda w: f"{w.recon_pct:.2f}%"),
@@ -832,14 +880,37 @@ def sec_raw(wins):
     for w in wins:
         h.append(f'<details><summary>{w.tag} — gateway samples ({w.samples} rows from '
                  f'{os.path.basename(w.tfile or "?")})</summary><div class="tbl-wrap"><table>'
-                 '<tr><th>Time (IST)</th><th class="num">Elapsed s</th><th class="num">req/s</th>'
+                 '<tr><th>Time (IST)</th><th class="num">Elapsed s</th><th class="num">Gap s</th>'
+                 '<th class="num">Requests in gap</th><th class="num">req/s</th>'
                  '<th class="num">Cumulative</th></tr>')
+        _rt = dict(w.rate_pts)
+        _pe = _pt = 0.0
+        _sumdelta = 0.0
         for r in w.traffic:
+            e = F(r.get("elapsed_s")); tot = F(r.get("total_since_start"))
+            gap = e - _pe; delta = tot - _pt
+            _sumdelta += delta
+            rate = _rt.get(e)
+            rcell = f1(rate) if rate is not None else '<span class="muted">excluded</span>'
             h.append(f'<tr><td class="mono">{short_ts(r.get("ts_ist",""))}</td>'
-                     f'<td class="num">{n0(r.get("elapsed_s"))}</td>'
-                     f'<td class="num">{f1(r.get("rate_rps"))}</td>'
-                     f'<td class="num">{n0(r.get("total_since_start"))}</td></tr>')
-        h.append("</table></div></details>")
+                     f'<td class="num">{n0(e)}</td><td class="num">{n0(gap)}</td>'
+                     f'<td class="num">{n0(delta)}</td><td class="num">{rcell}</td>'
+                     f'<td class="num">{n0(tot)}</td></tr>')
+            _pe, _pt = e, tot
+        h.append(f'<tr class="tot"><td>TOTAL <span class="muted">({w.samples} samples)</span></td>'
+                 f'<td class="num">{n0(w.duration)}</td><td class="num">–</td>'
+                 f'<td class="num">{n0(_sumdelta)}</td>'
+                 f'<td class="num">{f1(w.avg_rps)} avg</td>'
+                 f'<td class="num">{n0(w.total)}</td></tr>')
+        _note = ('<p class="muted">Every row is auditable: <b>requests in gap</b> &divide; <b>gap</b> = '
+                 '<b>req/s</b>, and the requests column sums to the cumulative total. Cumulative is the '
+                 'gateway counter measured against the baseline, so TOTAL is the final reading rather than '
+                 'a column sum — the two agree.')
+        if getattr(w, "dropped_first", False):
+            _note += (' The first row shows "excluded" because its recorded gap is far shorter than every '
+                      'later one — the capture stamped the time before reading the counter — so its rate '
+                      'would be overstated. Its requests still count toward the total.')
+        h.append("</table></div>" + _note + "</p></details>")
         h.append(f'<details><summary>{w.tag} — per-node final values '
                  f'({len(w.nodes)} nodes from {os.path.basename(w.nfile or "?")})</summary>'
                  '<div class="tbl-wrap"><table><tr><th>Node</th><th>Group</th>'
@@ -853,7 +924,19 @@ def sec_raw(wins):
                      f'<td class="num">{n0(d["rp_pk"])}</td><td class="num">{n0(d["tp_pk"])}</td>'
                      f'<td class="num">{n0(d["ct_pk"])}</td>'
                      f'<td class="num">{n0(d["fg"])}</td><td class="num">{n0(d["al"])}</td></tr>')
-        h.append("</table></div></details>")
+        _rp = max((d["rp_pk"] for d in w.nodes.values()), default=0.0)
+        _tp = max((d["tp_pk"] for d in w.nodes.values()), default=0.0)
+        h.append(f'<tr class="tot"><td>TOTAL <span class="muted">({len(w.nodes)} nodes)</span></td>'
+                 f'<td></td>'
+                 f'<td class="num">{f1(w.cl_rx_pk)}</td><td class="num">{f1(w.cl_tx_pk)}</td>'
+                 f'<td class="num">{n0(_rp)}</td><td class="num">{n0(_tp)}</td>'
+                 f'<td class="num">{n0(w.ct_pk)}</td>'
+                 f'<td class="num">{n0(w.node_fg)}</td><td class="num">{n0(w.node_al)}</td></tr>')
+        h.append("</table></div>"
+                 '<p class="muted">FROM GW and ALL RCVD are summed across nodes. The RX/TX peaks are the '
+                 'highest <i>simultaneous</i> cluster total, not a column sum — per-node peaks occur at '
+                 'different moments. The pkt/s and conntrack columns show the highest single-node value '
+                 'reached during the window.</p></details>')
     return "".join(h)
 
 
@@ -918,10 +1001,10 @@ def build(wins, nic_gbps):
 
     H = ['<!doctype html><html><head><meta charset="utf-8">'
          '<meta name="viewport" content="width=device-width, initial-scale=1">'
-         '<title>PERF Network Report</title>', CSS, '</head><body><div class="wrap">']
+         '<title>SBIePay 2.0 - PERF Network Report</title>', CSS, '</head><body><div class="wrap">']
     H.append('<div class="masthead">'
              '<div class="kick">Network &amp; Traffic · OCP Ingress Measurement</div>'
-             '<h1>SBI ePay 2.0 — PERF</h1>'
+             '<h1>SBIePay 2.0 - PERF Network Report</h1>'
              f'<div class="sub">Prepared by Saadi M Muzzammil · generated {now}</div>'
              f'<div class="sub">Windows: {esc(tags)} · '
              f'source: perf-all.sh gateway counters + node-exporter + istio sidecars</div>'

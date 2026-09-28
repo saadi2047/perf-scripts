@@ -778,19 +778,25 @@ def build(a):
              '<a href="#s7">7 · Spin-up</a><a href="#s8">8 · Distribution</a>'
              '<a href="#s9">9 · Log signals</a><a href="#s10">10 · Restarts</a></div>')
     ch=read_kv(os.path.join(a.infra,"capture_health.txt")) if a.infra else {}
-    _bad=0
-    try:
-        _bad = int(ch.get("empty_top_nodes","0") or 0) \
-             + int((ch.get("empty_pod_lists","0") or "0").split()[0]) \
-             + int((ch.get("empty_top_pods","0") or "0").split()[0])
-    except Exception: _bad=0
+    def _n(v):
+        try: return int(str(v).split()[0])
+        except Exception: return 0
+    # Only genuine mid-run data loss earns a warning. A namespace with nothing
+    # deployed in it is a fact about the cluster, and is reported as such.
+    _bad = _n(ch.get("empty_top_nodes")) + _n(ch.get("empty_pod_lists")) + _n(ch.get("empty_top_pods"))
     if _bad:
-        H.append('<div class="verdict bad"><b>Incomplete capture.</b> Some samples came back empty from the '
-                 f'cluster — top-nodes empty on {ch.get("empty_top_nodes","?")} sample(s), pod lists empty on '
-                 f'{ch.get("empty_pod_lists","?")}, top-pods empty on {ch.get("empty_top_pods","?")}. '
-                 'The usual causes are an oc session that expired mid-run or metrics-server being briefly '
-                 'unavailable. Every figure below is computed from the samples that did return, so treat '
-                 'peaks and totals as a floor rather than the full picture.</div>')
+        H.append('<div class="verdict bad"><b>Incomplete capture.</b> Data was lost part-way through the run '
+                 f'— top-nodes empty on {ch.get("empty_top_nodes","?")} sample(s), pod lists on '
+                 f'{ch.get("empty_pod_lists","?")}, top-pods on {ch.get("empty_top_pods","?")} '
+                 '(counted only for namespaces that had been returning pods). The usual causes are an oc '
+                 'session that expired mid-run or metrics-server being briefly unavailable. Every figure '
+                 'below is computed from the samples that did return, so treat peaks and totals as a floor '
+                 'rather than the full picture.</div>')
+    _empty_ns = (ch.get("namespaces_empty") or "").strip()
+    if _empty_ns:
+        _list = ", ".join(f'<span class="pod-mono">{n}</span>' for n in _empty_ns.split())
+        H.append(f'<p class="muted">Namespaces with nothing deployed during this run: {_list}. '
+                 'They hold no pods, so they contribute no figures — this is not a capture problem.</p>')
     H.append(f'<div class="verdict {vcls}"><b>Summary.</b> {vtext}</div>')
 
     def band(title, sub):

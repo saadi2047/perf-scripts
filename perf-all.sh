@@ -82,6 +82,17 @@ for r in d["data"]["result"]:
 '
 }
 
+# Millisecond wall clock. `date +%s%3N` is GNU (present on RHEL); anything else
+# falls back to whole seconds. Rates divide by this, so a +/-1s rounding at each
+# end of a 30s gap stops costing ~3% accuracy.
+now_ms() {
+  _t=$(date +%s%3N 2>/dev/null)
+  case "$_t" in
+    ''|*[!0-9]*) echo "$(date +%s)000" ;;
+    *)           echo "$_t" ;;
+  esac
+}
+
 # ---------- pod -> node map ----------
 # custom-columns, NOT -o wide. A RESTARTS cell renders as "1 (51m ago)", which splits
 # into three whitespace fields and shifts every later column: $8 then held the pod's
@@ -247,6 +258,9 @@ done
 GW_PREV=$GW_BASE
 GW_SINCE=0
 T0=$(date +%s)
+T0_MS=$(now_ms)
+PREV_READ_MS=$T0_MS   # ms clock of the last counter read (baseline counts as read 0)
+LAST_READ_MS=$T0_MS
 DEADLINE=0
 [ "$DURATION" -gt 0 ] 2>/dev/null && DEADLINE=$(( T0 + DURATION ))
 START_IST=$(TZ=Asia/Kolkata date '+%Y-%m-%d %H:%M:%S')
@@ -256,7 +270,13 @@ echo "ts_ist,node,rx_mbps,tx_mbps,rx_pps,tx_pps,conntrack,from_gateway,all_recei
 
 finish() {
   END_IST=$(TZ=Asia/Kolkata date '+%Y-%m-%d %H:%M:%S')
-  EL=$(( $(date +%s) - T0 ))
+  # average over the span the counters actually cover (baseline read -> last read),
+  # so this figure matches the CSV and the HTML report instead of adding the
+  # trailing partial cycle to the denominator.
+  EL_MS=$(( LAST_READ_MS - T0_MS ))
+  [ "$EL_MS" -lt 1 ] && EL_MS=$(( $(now_ms) - T0_MS ))
+  [ "$EL_MS" -lt 1 ] && EL_MS=1000
+  EL=$(( (EL_MS + 500) / 1000 )); [ "$EL" -lt 1 ] && EL=1
   echo
   echo "=================================================================================="
   echo "   LOAD WINDOW SUMMARY   (tag: $TAG)"
@@ -266,7 +286,7 @@ finish() {
   printf "   DURATION     : %s s (%s min)\n" "$EL" "$(awk -v e=$EL 'BEGIN{printf "%.1f", e/60}')"
   printf "   OCP RECEIVED : %s requests\n" "$GW_SINCE"
   printf "   AVERAGE RATE : %s req/s\n" \
-     "$(awk -v t="$GW_SINCE" -v e="$EL" 'BEGIN{ if(e>0) printf "%.1f", t/e; else print 0}')"
+     "$(awk -v t="$GW_SINCE" -v e="$EL_MS" 'BEGIN{ if(e>0) printf "%.1f", t*1000/e; else print 0}')"
   echo "=================================================================================="
   printf "   CSV: %s  and  %s\n" "$GCSV" "$NCSV"
   rm -rf "$REQTMP"
@@ -277,12 +297,11 @@ trap finish INT
 # ---------- single loop: both sections, same window ----------
 while :; do
   sleep "$INT"
-  NOW=$(date +%s); EL=$((NOW - T0))
+  NOW=$(date +%s)
   if [ "$DEADLINE" -gt 0 ] && [ "$NOW" -ge "$DEADLINE" ]; then
     echo "[*] duration limit reached (${DURATION}s) — closing the window on schedule."
     finish
   fi
-  TS=$(TZ=Asia/Kolkata date '+%Y-%m-%d %H:%M:%S')
 
   # ===== section 2 data: nodes =====
   NETDEV='device!~"lo|veth.*|br.*|ovn.*|genev.*|tun.*|docker.*"'
@@ -293,6 +312,18 @@ while :; do
   q 'node_nf_conntrack_entries' > /tmp/.nn_ct
   collect_requests > /tmp/.pa_req_now
 
+  # The counters for BOTH sections were just read. Time the READ, not the start of
+  # the cycle: a cycle is `sleep INT` plus ~20s of pod execs and Thanos queries, so
+  # dividing the counter delta by INT overstated the rate by the ratio between the
+  # two (~3x at INT=10). Rate must divide by the real gap between reads.
+  READ_MS=$(now_ms)
+  EL=$(( (READ_MS - T0_MS + 500) / 1000 ))
+  GAP_MS=$(( READ_MS - PREV_READ_MS )); [ "$GAP_MS" -lt 1 ] && GAP_MS=1
+  GAP=$(( (GAP_MS + 500) / 1000 )); [ "$GAP" -lt 1 ] && GAP=1
+  PREV_READ_MS=$READ_MS
+  LAST_READ_MS=$READ_MS
+  TS=$(TZ=Asia/Kolkata date '+%Y-%m-%d %H:%M:%S')
+
   # ===== section 1 data: gateway (values captured in the same batch as section 2) =====
   # prev/base are filled by the eval inside the loop; initialise them so the
   # script is safe under `set -u` even if GWPODS is somehow empty.
@@ -302,7 +333,7 @@ while :; do
     eval "prev=\$GWPREV_$k; base=\$GWBASE_$k"
     d=$((v - prev)); [ "$d" -lt 0 ] && d=0
     tp=$((v - base)); [ "$tp" -lt 0 ] && tp=0
-    r=$(awk -v d="$d" -v i="$INT" 'BEGIN{printf "%9.1f", d/i}')
+    r=$(awk -v d="$d" -v g="$GAP_MS" 'BEGIN{printf "%9.1f", d*1000/g}')
     GWLINES="${GWLINES}$(printf '     %s /s  %s total   %s' "$r" "$tp" "$p")\n"
     eval "GWPREV_$k=$v"
     GW_NOW=$((GW_NOW + v))
@@ -310,8 +341,9 @@ while :; do
   DG=$((GW_NOW - GW_PREV)); [ "$DG" -lt 0 ] && DG=0
   GW_SINCE=$((GW_NOW - GW_BASE)); [ "$GW_SINCE" -lt 0 ] && GW_SINCE=0
   GW_PREV=$GW_NOW
-  RPS=$(awk -v d="$DG" -v i="$INT" 'BEGIN{printf "%.1f", d/i}')
-  AVG=$(awk -v t="$GW_SINCE" -v e="$EL" 'BEGIN{ if(e>0) printf "%.1f", t/e; else print "0.0"}')
+  RPS=$(awk -v d="$DG" -v g="$GAP_MS" 'BEGIN{printf "%.1f", d*1000/g}')
+  AVG=$(awk -v t="$GW_SINCE" -v e="$READ_MS" -v z="$T0_MS" \
+        'BEGIN{ e=e-z; if(e>0) printf "%.1f", t*1000/e; else print "0.0"}')
   echo "$TS,$EL,$RPS,$GW_SINCE" >> "$GCSV"
 
   OUT=$(python3 - "$TS" "$NCSV" <<'PY'
@@ -388,12 +420,13 @@ print(f"  {'':16}{'Mbps in':>9}{'Mbps out':>9}{'':9}{'':9}{'':8}{'= gateway':>11
 PY
 )
   if [ "$QUIET" -eq 1 ]; then
-    printf "%s  elapsed %5ss   %9s req/s   total %s\n" "$TS" "$EL" "$RPS" "$GW_SINCE"
+    printf "%s  elapsed %5ss  cycle %3ss  %9s req/s  total %s\n" \
+      "$TS" "$EL" "$GAP" "$RPS" "$GW_SINCE"
     continue
   fi
   clear
   echo "=================================================================================="
-  echo "   PERF TRAFFIC — $TS IST    elapsed ${EL}s    refresh ${INT}s    tag=$TAG"
+  echo "   PERF TRAFFIC — $TS IST    elapsed ${EL}s    cycle ${GAP}s (asked ${INT}s)    tag=$TAG"
   echo "   window start $START_IST IST"
   echo "=================================================================================="
   echo

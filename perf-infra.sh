@@ -78,6 +78,9 @@ for ns in $NAMESPACES; do NSFLAG="$NSFLAG -n $ns"; done
 # CSVs just go quiet and the report looks like "nothing happened" instead of
 # "we stopped being able to look".
 EMPTY_NODES=0; EMPTY_PODS=0; EMPTY_TOP=0; SAMPLES_RUN=0
+# A namespace with no pods at all is a fact about the cluster, not a capture
+# failure. Only a namespace that HAS returned pods and then stops is a problem.
+NSSTATE="$OUTDIR/.nsstate"; mkdir -p "$NSSTATE"
 
 i=0
 while [ "$i" -lt "$SAMPLES" ]; do
@@ -125,7 +128,10 @@ PYHPA
   for ns in $NAMESPACES; do
     # --- CPU/mem via adm top ---
     oc -n "$ns" adm top pods --no-headers 2>/dev/null > "$sdir/top_${ns}.txt"
-    [ -s "$sdir/top_${ns}.txt" ] || EMPTY_TOP=$((EMPTY_TOP+1))
+    # only a miss if the namespace is known to hold pods
+    if [ ! -s "$sdir/top_${ns}.txt" ] && [ -f "$NSSTATE/seen_$ns" ]; then
+      EMPTY_TOP=$((EMPTY_TOP+1))
+    fi
     # per-container split (app vs istio-proxy sidecar) — lets the report show app-only CPU,
     # which is what Dynatrace's per-container view reports.
     oc -n "$ns" adm top pods --containers --no-headers 2>/dev/null > "$sdir/topc_${ns}.txt"
@@ -154,7 +160,12 @@ PYHPA
     oc -n "$ns" get pods --no-headers 2>/dev/null \
        -o custom-columns='POD:.metadata.name,PHASE:.status.phase,RC:.status.containerStatuses[*].restartCount,IP:.status.podIP,NODE:.spec.nodeName' \
        > "$sdir/pods_${ns}.txt"
-    [ -s "$sdir/pods_${ns}.txt" ] || EMPTY_PODS=$((EMPTY_PODS+1))
+    if [ -s "$sdir/pods_${ns}.txt" ]; then
+      : > "$NSSTATE/seen_$ns"
+    elif [ -f "$NSSTATE/seen_$ns" ]; then
+      EMPTY_PODS=$((EMPTY_PODS+1))
+      echo ""; echo "    [!] $ns: pod list came back empty after previously returning pods"
+    fi
     while read -r pod status rcs ip node _rest; do
       [ -z "$pod" ] && continue
       rc=$(echo "${rcs:-0}" | awk -F, '{s=0; for(j=1;j<=NF;j++) s+=$j+0; print s}')
@@ -299,29 +310,40 @@ PYJSON
 done
 
 # ---------- capture health ----------
-_ns_expected=$(echo "$NAMESPACES" | wc -w)
-_pod_expected=$(( SAMPLES_RUN * _ns_expected ))
+# Namespaces that never held a pod are listed as information. Only namespaces that
+# held pods and then went quiet count against the capture.
+EMPTY_NS=""; LIVE_NS=0
+for ns in $NAMESPACES; do
+  if [ -f "$NSSTATE/seen_$ns" ]; then LIVE_NS=$((LIVE_NS+1)); else EMPTY_NS="$EMPTY_NS $ns"; fi
+done
+EMPTY_NS="${EMPTY_NS# }"
+_expected=$(( SAMPLES_RUN * LIVE_NS ))
 {
   echo "samples_run=$SAMPLES_RUN"
+  echo "namespaces_with_pods=$LIVE_NS"
+  echo "namespaces_empty=$EMPTY_NS"
   echo "empty_top_nodes=$EMPTY_NODES"
-  echo "empty_pod_lists=$EMPTY_PODS of $_pod_expected"
-  echo "empty_top_pods=$EMPTY_TOP of $_pod_expected"
+  echo "empty_pod_lists=$EMPTY_PODS of $_expected"
+  echo "empty_top_pods=$EMPTY_TOP of $_expected"
 } > "$OUTDIR/capture_health.txt"
+rm -rf "$NSSTATE"
 if [ "$EMPTY_NODES" -gt 0 ] || [ "$EMPTY_PODS" -gt 0 ] || [ "$EMPTY_TOP" -gt 0 ]; then
   echo ""
   echo "  ============================================================"
-  echo "  [!] CAPTURE HEALTH WARNING — some samples came back empty"
+  echo "  [!] CAPTURE HEALTH WARNING — data was lost mid-run"
   echo "      'oc adm top nodes' empty : $EMPTY_NODES of $SAMPLES_RUN samples"
-  echo "      pod lists empty          : $EMPTY_PODS of $_pod_expected namespace-samples"
-  echo "      'oc adm top pods' empty  : $EMPTY_TOP of $_pod_expected namespace-samples"
+  echo "      pod lists went empty     : $EMPTY_PODS of $_expected namespace-samples"
+  echo "      'oc adm top pods' empty  : $EMPTY_TOP of $_expected namespace-samples"
+  echo "      (counted only for namespaces that HAD returned pods earlier)"
   echo "      Usual causes: the oc session expired mid-run, or metrics-server"
   echo "      was unavailable. Figures below are based on the samples that"
   echo "      DID return — treat them as a floor, not the full picture."
   echo "  ============================================================"
   echo ""
 else
-  echo "[✓] capture health: all $SAMPLES_RUN samples returned data"
+  echo "[✓] capture health: all $SAMPLES_RUN samples returned data from all $LIVE_NS populated namespaces"
 fi
+[ -n "$EMPTY_NS" ] && echo "    note: no pods deployed in — $EMPTY_NS (skipped, not an error)"
 
 echo "[*] collection complete, parsing trends..."
 SCRIPT_DIR=$(dirname "$0")

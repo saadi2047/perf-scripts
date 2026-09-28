@@ -78,6 +78,9 @@ while [ "$i" -lt "$SAMPLES" ]; do
 
   for ns in $NAMESPACES; do
     pods=$(oc -n "$ns" get pods --no-headers 2>/dev/null | awk '$3=="Running"{print $1}')
+    if [ -z "$pods" ]; then
+      echo "    [!] $ns: no Running pods returned — namespace empty, or the oc session expired"
+    fi
     for pod in $pods; do
       # incremental pull, app container auto-detected (skip istio-proxy)
       appc=$(oc -n "$ns" get pod "$pod" -o jsonpath='{.spec.containers[*].name}' 2>/dev/null | tr ' ' '\n' | grep -v istio | head -1)

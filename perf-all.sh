@@ -1,14 +1,17 @@
 #!/usr/bin/env sh
 # perf-all.sh — ONE script, ONE window: gateway ingress + node-level traffic.
 #
-#   ./perf-all.sh              # refresh every 10s
-#   ./perf-all.sh 10 run1      # 10s refresh, logs traffic_run1.csv + nodenet_run1.csv
+#   ./perf-all.sh                        # refresh every 10s, stop with Ctrl-C
+#   ./perf-all.sh 10 run1                # 10s refresh -> traffic_run1.csv + nodenet_run1.csv
+#   ./perf-all.sh 10 run1 -o DIR         # write both CSVs into DIR
+#   ./perf-all.sh 10 run1 -d 1800        # stop itself after 1800s (no Ctrl-C needed)
+#   ./perf-all.sh --check                # preflight: test every dependency, name the failure
 #
 #   SECTION 1  gateway ingress   (= what AVLB delivered to OCP)
 #   SECTION 2  per-node network + requests, grouped
 #
 # Both sections share the SAME baseline and the SAME window, so the totals
-# reconcile. Ctrl-C prints one summary for the whole window.
+# reconcile. Ctrl-C (or -d) prints one summary for the whole window.
 #
 # Use 10s or higher: section 2 execs into every perf pod each cycle.
 set -u
@@ -16,14 +19,30 @@ set -u
 CHECK=0
 [ "${1:-}" = "--check" ] && { CHECK=1; shift; }
 
-INT="${1:-10}"
-TAG="${2:-$(date +%H%M)}"
+# positional INTERVAL and TAG stay first for backward compatibility
+INT=10; TAG=""
+case "${1:-}" in ''|-*) ;; *) INT="$1"; shift;; esac
+case "${1:-}" in ''|-*) ;; *) TAG="$1"; shift;; esac
+OUTDIR="."; DURATION=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) OUTDIR="${2:-.}"; shift 2;;
+    -d) DURATION="${2:-0}"; shift 2;;
+    *)  shift;;
+  esac
+done
+[ -z "$TAG" ] && TAG=$(date +%H%M)
+mkdir -p "$OUTDIR" 2>/dev/null
 GWNS="perf-istio-system"
 GWSEL="istio=perf-istio-gateway"
 MPATH="/stats/prometheus"
-GCSV="traffic_${TAG}.csv"
-NCSV="nodenet_${TAG}.csv"
+GCSV="$OUTDIR/traffic_${TAG}.csv"
+NCSV="$OUTDIR/nodenet_${TAG}.csv"
 REQTMP="/tmp/.pa_req"
+
+# Redrawing the screen only makes sense on a terminal. Launched from perf-run.sh
+# its output is piped, so print one progress line per cycle instead.
+QUIET=0; [ -t 1 ] || QUIET=1
 
 # In --check mode nothing exits early: the point is to reach every step and show
 # which one fails, so a missing token does not hide a broken pod list.
@@ -228,6 +247,8 @@ done
 GW_PREV=$GW_BASE
 GW_SINCE=0
 T0=$(date +%s)
+DEADLINE=0
+[ "$DURATION" -gt 0 ] 2>/dev/null && DEADLINE=$(( T0 + DURATION ))
 START_IST=$(TZ=Asia/Kolkata date '+%Y-%m-%d %H:%M:%S')
 
 echo "ts_ist,elapsed_s,rate_rps,total_since_start" > "$GCSV"
@@ -243,7 +264,7 @@ finish() {
   printf "   START (IST)  : %s\n" "$START_IST"
   printf "   END   (IST)  : %s\n" "$END_IST"
   printf "   DURATION     : %s s (%s min)\n" "$EL" "$(awk -v e=$EL 'BEGIN{printf "%.1f", e/60}')"
-  printf "   OCP RECEIVED : %s requests   <-- give this to the LB team\n" "$GW_SINCE"
+  printf "   OCP RECEIVED : %s requests\n" "$GW_SINCE"
   printf "   AVERAGE RATE : %s req/s\n" \
      "$(awk -v t="$GW_SINCE" -v e="$EL" 'BEGIN{ if(e>0) printf "%.1f", t/e; else print 0}')"
   echo "=================================================================================="
@@ -257,6 +278,10 @@ trap finish INT
 while :; do
   sleep "$INT"
   NOW=$(date +%s); EL=$((NOW - T0))
+  if [ "$DEADLINE" -gt 0 ] && [ "$NOW" -ge "$DEADLINE" ]; then
+    echo "[*] duration limit reached (${DURATION}s) — closing the window on schedule."
+    finish
+  fi
   TS=$(TZ=Asia/Kolkata date '+%Y-%m-%d %H:%M:%S')
 
   # ===== section 2 data: nodes =====
@@ -269,7 +294,9 @@ while :; do
   collect_requests > /tmp/.pa_req_now
 
   # ===== section 1 data: gateway (values captured in the same batch as section 2) =====
-  GW_NOW=0; GWLINES=""; k=0
+  # prev/base are filled by the eval inside the loop; initialise them so the
+  # script is safe under `set -u` even if GWPODS is somehow empty.
+  GW_NOW=0; GWLINES=""; k=0; prev=0; base=0
   for p in $GWPODS; do
     k=$((k+1)); v=$(cat "$REQTMP/GW__$p" 2>/dev/null); [ -z "$v" ] && v=0
     eval "prev=\$GWPREV_$k; base=\$GWBASE_$k"
@@ -360,6 +387,10 @@ print(f"  {'CLUSTER TOTAL':<16}{G_rx:9.1f}{G_tx:9.1f}{'':9}{'':9}{'':8}{G_fg:11.
 print(f"  {'':16}{'Mbps in':>9}{'Mbps out':>9}{'':9}{'':9}{'':8}{'= gateway':>11}{'incl. e-w':>11}")
 PY
 )
+  if [ "$QUIET" -eq 1 ]; then
+    printf "%s  elapsed %5ss   %9s req/s   total %s\n" "$TS" "$EL" "$RPS" "$GW_SINCE"
+    continue
+  fi
   clear
   echo "=================================================================================="
   echo "   PERF TRAFFIC — $TS IST    elapsed ${EL}s    refresh ${INT}s    tag=$TAG"

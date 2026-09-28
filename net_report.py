@@ -1025,12 +1025,18 @@ def main():
         if not w.ok_traffic and not w.ok_nodes:
             print(f"  [skip] {tag}: both CSVs missing or empty")
             continue
+        if w.samples < 2 and w.total == 0:
+            print(f"  [skip] {tag}: only {w.samples} sample(s) and no traffic — nothing to report")
+            continue
         wins.append(w)
         print(f"  [window] {tag}: {w.samples} gateway samples, {len(w.nodes)} nodes, "
               f"{int(w.total):,} requests")
     if not wins:
-        print("ERROR: nothing to report on.")
-        raise SystemExit(1)
+        print("No usable load window found — network report not written.")
+        print("  A window needs at least 2 samples in traffic_<tag>.csv.")
+        print("  Checked: " + ", ".join(os.path.basename(t) for _, t, _ in specs))
+        print("  If the capture was cut short, re-run:  ./perf-all.sh 10 <tag> -o <run folder>")
+        raise SystemExit(2)
 
     with open(a.o, "w") as f:
         f.write(build(wins, a.nic_gbps))

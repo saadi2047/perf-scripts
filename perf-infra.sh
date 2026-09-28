@@ -73,6 +73,12 @@ echo "sample,ts,node,cpu_m,cpu_pct,mem_mi,mem_pct" > "$OUTDIR/node_usage.csv"
 NSFLAG=""
 for ns in $NAMESPACES; do NSFLAG="$NSFLAG -n $ns"; done
 
+# Capture-health counters. A long run can start failing halfway through (expired
+# token, throttled API) and every oc call here is 2>/dev/null, so without this the
+# CSVs just go quiet and the report looks like "nothing happened" instead of
+# "we stopped being able to look".
+EMPTY_NODES=0; EMPTY_PODS=0; EMPTY_TOP=0; SAMPLES_RUN=0
+
 i=0
 while [ "$i" -lt "$SAMPLES" ]; do
   if [ "$(date +%s)" -ge "$DEADLINE" ]; then
@@ -88,6 +94,10 @@ while [ "$i" -lt "$SAMPLES" ]; do
 
   # --- node-level usage (whole cluster), once per sample ---
   oc adm top nodes --no-headers 2>/dev/null > "$sdir/top_nodes.txt"
+  if [ ! -s "$sdir/top_nodes.txt" ]; then
+    EMPTY_NODES=$((EMPTY_NODES+1))
+    echo ""; echo "    [!] sample $i: 'oc adm top nodes' returned nothing (metrics API down, or session expired?)"
+  fi
   while read -r nname ncpu ncpupct nmem nmempct _r; do
     [ -z "$nname" ] && continue
     echo "$i,$now,$nname,$(echo "$ncpu"|sed 's/m//'),$(echo "$ncpupct"|sed 's/%//'),$(echo "$nmem"|sed 's/Mi//'),$(echo "$nmempct"|sed 's/%//')" >> "$OUTDIR/node_usage.csv"
@@ -115,6 +125,7 @@ PYHPA
   for ns in $NAMESPACES; do
     # --- CPU/mem via adm top ---
     oc -n "$ns" adm top pods --no-headers 2>/dev/null > "$sdir/top_${ns}.txt"
+    [ -s "$sdir/top_${ns}.txt" ] || EMPTY_TOP=$((EMPTY_TOP+1))
     # per-container split (app vs istio-proxy sidecar) — lets the report show app-only CPU,
     # which is what Dynatrace's per-container view reports.
     oc -n "$ns" adm top pods --containers --no-headers 2>/dev/null > "$sdir/topc_${ns}.txt"
@@ -132,11 +143,21 @@ PYHPA
       echo "$i,$now,$ns,$pod,$cpu_m,$mem_mi" >> "$OUTDIR/pod_usage.csv"
     done < "$sdir/top_${ns}.txt"
 
-    # --- status + restarts (wide = includes NODE + IP for placement/network) ---
-    oc -n "$ns" get pods -o wide --no-headers 2>/dev/null > "$sdir/pods_${ns}.txt"
-    while read -r pod ready status restarts age ip node _rest; do
+    # --- status + restarts + placement ---
+    # custom-columns, NOT -o wide. In `-o wide` a RESTARTS cell renders as
+    # "1 (51m ago)" — three whitespace fields — which shifted every later column,
+    # so `node` silently received the pod's AGE ("51m") and pod_placement.csv (and
+    # therefore node_distribution.csv in the report) was wrong for every pod that
+    # had restarted. custom-columns has one field per column, always.
+    # restartCount is per container, so it arrives as "0,3" and has to be summed;
+    # `-o wide` used to do that sum for us.
+    oc -n "$ns" get pods --no-headers 2>/dev/null \
+       -o custom-columns='POD:.metadata.name,PHASE:.status.phase,RC:.status.containerStatuses[*].restartCount,IP:.status.podIP,NODE:.spec.nodeName' \
+       > "$sdir/pods_${ns}.txt"
+    [ -s "$sdir/pods_${ns}.txt" ] || EMPTY_PODS=$((EMPTY_PODS+1))
+    while read -r pod status rcs ip node _rest; do
       [ -z "$pod" ] && continue
-      rc=$(echo "$restarts" | grep -oE '^[0-9]+' | head -1)
+      rc=$(echo "${rcs:-0}" | awk -F, '{s=0; for(j=1;j<=NF;j++) s+=$j+0; print s}')
       echo "$i,$now,$ns,$pod,${rc:-0},$status" >> "$OUTDIR/pod_status.csv"
       # placement + network: pod -> node, ip (for distribution + traceability)
       echo "$i,$now,$ns,$pod,${node:-?},${ip:-?}" >> "$OUTDIR/pod_placement.csv"
@@ -206,8 +227,35 @@ PYJSON
       ' "$sdir/probe_${ns}.txt" >> "$OUTDIR/probe_failures.csv"
     fi
 
-    # --- scheduler events (this cycle) split by reason ---
-    oc -n "$ns" get events --field-selector reason=FailedScheduling --no-headers 2>/dev/null > "$sdir/sched_${ns}.txt"
+    # --- scheduler events split by reason ---
+    # `oc get events` returns EVERY retained FailedScheduling event, including ones
+    # that fired long before this run started — reading them each cycle counted the
+    # same stale event once per sample and reported it as live CPU pressure.
+    # Column 1 is the event's age (13s / 4m32s / 100m / 2d1h): keep only events
+    # younger than the time elapsed since the run began.
+    _elapsed=$(( $(date +%s) - START_EPOCH + 30 ))
+    oc -n "$ns" get events --field-selector reason=FailedScheduling --no-headers 2>/dev/null \
+      > "$sdir/sched_all_${ns}.txt"
+    awk -v lim="$_elapsed" '
+      function age(a,   n,v,u,tot,i,c) {
+        tot=0; n="";
+        for (i=1; i<=length(a); i++) {
+          c=substr(a,i,1)
+          if (c ~ /[0-9]/) { n = n c }
+          else {
+            v = n+0; n=""
+            if      (c=="s") tot += v
+            else if (c=="m") tot += v*60
+            else if (c=="h") tot += v*3600
+            else if (c=="d") tot += v*86400
+            else if (c=="y") tot += v*31536000
+            else return -1
+          }
+        }
+        return (n=="") ? tot : -1
+      }
+      { a = age($1); if (a >= 0 && a <= lim) print }
+    ' "$sdir/sched_all_${ns}.txt" > "$sdir/sched_${ns}.txt"
     # per-pod FailedScheduling message (the WHY a pod is Pending)
     if [ -s "$sdir/sched_${ns}.txt" ]; then
       awk -v s="$i" -v t="$now" -v n="$ns" '
@@ -234,6 +282,7 @@ PYJSON
   done
 
   # cycle timing / overrun guard
+  SAMPLES_RUN=$i
   cyc_end=$(date +%s)
   took=$((cyc_end - cyc_start))
   echo "done (${took}s)"
@@ -248,6 +297,31 @@ PYJSON
     fi
   fi
 done
+
+# ---------- capture health ----------
+_ns_expected=$(echo "$NAMESPACES" | wc -w)
+_pod_expected=$(( SAMPLES_RUN * _ns_expected ))
+{
+  echo "samples_run=$SAMPLES_RUN"
+  echo "empty_top_nodes=$EMPTY_NODES"
+  echo "empty_pod_lists=$EMPTY_PODS of $_pod_expected"
+  echo "empty_top_pods=$EMPTY_TOP of $_pod_expected"
+} > "$OUTDIR/capture_health.txt"
+if [ "$EMPTY_NODES" -gt 0 ] || [ "$EMPTY_PODS" -gt 0 ] || [ "$EMPTY_TOP" -gt 0 ]; then
+  echo ""
+  echo "  ============================================================"
+  echo "  [!] CAPTURE HEALTH WARNING — some samples came back empty"
+  echo "      'oc adm top nodes' empty : $EMPTY_NODES of $SAMPLES_RUN samples"
+  echo "      pod lists empty          : $EMPTY_PODS of $_pod_expected namespace-samples"
+  echo "      'oc adm top pods' empty  : $EMPTY_TOP of $_pod_expected namespace-samples"
+  echo "      Usual causes: the oc session expired mid-run, or metrics-server"
+  echo "      was unavailable. Figures below are based on the samples that"
+  echo "      DID return — treat them as a floor, not the full picture."
+  echo "  ============================================================"
+  echo ""
+else
+  echo "[✓] capture health: all $SAMPLES_RUN samples returned data"
+fi
 
 echo "[*] collection complete, parsing trends..."
 SCRIPT_DIR=$(dirname "$0")

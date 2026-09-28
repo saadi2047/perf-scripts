@@ -122,14 +122,44 @@ for svc in services:
     if restart_delta.get(svc, 0) > 0:
         findings.append(f"{svc}: {restart_delta[svc]} pod restart(s) occurred during the hour.")
 
-# scheduler findings — separate real cpu pressure from noise
-for ns, reasons in sched.items():
-    cpu = reasons.get("Insufficient_cpu", 0)
-    noise = reasons.get("node_affinity",0) + reasons.get("pvc_volume",0) + reasons.get("taint",0)
-    if cpu > 0:
-        findings.append(f"{ns}: {cpu} 'Insufficient cpu' scheduling event(s) — real CPU scheduling pressure.")
-    if noise > 0:
-        findings.append(f"{ns}: {noise} scheduling event(s) from affinity/PVC/taint — NOT cpu-related (excluded from capacity signal).")
+# scheduler findings.
+# scheduler_events.csv counts one row per sample, so the same outstanding failure is
+# re-counted every cycle. Report DISTINCT PODS from pending_events.csv instead, and
+# cross-check against pod_status: a FailedScheduling event for a pod that was Running
+# the whole time is a retained event from before the window, not live pressure.
+_evpods = defaultdict(set)          # ns -> {pod}   (pods with an Insufficient-cpu event)
+_evnoise = defaultdict(set)
+_pe = os.path.join(outdir, "pending_events.csv")
+if os.path.exists(_pe):
+    for r in csv.DictReader(open(_pe)):
+        m = (r.get("message") or "")
+        key = (r.get("namespace",""), r.get("pod",""))
+        if "Insufficient cpu" in m:
+            _evpods[key[0]].add(key[1])
+        elif any(k in m.lower() for k in ("affinity", "selector", "taint", "volume", "pvc")):
+            _evnoise[key[0]].add(key[1])
+
+_everpending = set()                # pods actually observed Pending at any sample
+_psp = os.path.join(outdir, "pod_status.csv")
+if os.path.exists(_psp):
+    for r in csv.DictReader(open(_psp)):
+        if "Pending" in (r.get("status") or ""):
+            _everpending.add(r.get("pod",""))
+
+for ns in sorted(set(_evpods) | set(_evnoise)):
+    cpods = _evpods.get(ns, set())
+    stuck = cpods & _everpending
+    if stuck:
+        findings.append(f"{ns}: {len(stuck)} pod(s) could not be scheduled for lack of CPU "
+                        f"and were seen Pending — real CPU scheduling pressure.")
+    elif cpods:
+        findings.append(f"{ns}: {len(cpods)} pod(s) carry an 'Insufficient cpu' scheduling event, "
+                        f"but none was ever observed Pending during the window — these are retained "
+                        f"events from before the run, not live pressure.")
+    npods = _evnoise.get(ns, set()) - cpods
+    if npods:
+        findings.append(f"{ns}: {len(npods)} pod(s) with affinity/PVC/taint scheduling events — "
+                        f"NOT cpu-related (excluded from the capacity signal).")
 
 with open(os.path.join(outdir, "findings.txt"), "w") as f:
     if findings:

@@ -1,39 +1,73 @@
+[osuser@bastion perf-testing-v3]$ ./perf-run.sh after
+[*] run folder: /home/osuser/saadi/M/Muzzammil/perf-testing-v3/perf-test-20260928_140053
+[*] perf-capacity.sh  phase=after  out=/home/osuser/saadi/M/Muzzammil/perf-testing-v3/perf-test-20260928_140053/perf_capacity_after_20260928_142259
+[*] capturing raw node + pod data...
+[*] raw capture done. (parser + HTML in next build step)
+[*] OUTDIR=/home/osuser/saadi/M/Muzzammil/perf-testing-v3/perf-test-20260928_140053/perf_capacity_after_20260928_142259
+[*] parsing capacity...
+    [parser] node usage parsed for 24 nodes
+    [parser] 24 nodes classified
+    [parser] app pool: 12 worker nodes (0 carry a gemfire taint -> need matching toleration)
+    [parser] largest app-worker free slot: 5876m (fit 3000m pod: YES)
+    [extras] HPA rows: 37, Pending pods: 10
+    [extras] txn-transactionservice HPA (perf): min=12 max=21 current=12
+    [alloc] 9 services; totals cur cpu_req=84150m mem_req=144896Mi | max cpu_req=180600m mem_req=321536Mi
+[*] packaging...
+[✓] DONE
+    dir: /home/osuser/saadi/M/Muzzammil/perf-testing-v3/perf-test-20260928_140053/perf_capacity_after_20260928_142259
+    zip: /home/osuser/saadi/M/Muzzammil/perf-testing-v3/perf-test-20260928_140053/perf_capacity_after_20260928_142259.zip
+
+    Key outputs:
+      node_capacity.csv      — per-node alloc/reserved/free, classified
+      capacity_by_class.csv  — app-worker vs gemfire vs infra (the 112c truth)
+      fit_check.txt          — can a 3000m txn pod be placed?
+      hpa_state.csv          — live min/max/current (repo-drift check)
+      pending_pods.csv       — anything Pending at snapshot
+[osuser@bastion perf-testing-v3]$ ./perf-run.sh report
+[*] run folder: /home/osuser/saadi/M/Muzzammil/perf-testing-v3/perf-test-20260928_140053
+    before=/home/osuser/saadi/M/Muzzammil/perf-testing-v3/perf-test-20260928_140053/perf_capacity_before_20260928_140053
+    after=/home/osuser/saadi/M/Muzzammil/perf-testing-v3/perf-test-20260928_140053/perf_capacity_after_20260928_142259
+    infra=/home/osuser/saadi/M/Muzzammil/perf-testing-v3/perf-test-20260928_140053/perf_infra_20260928_140122
+    app=/home/osuser/saadi/M/Muzzammil/perf-testing-v3/perf-test-20260928_140053/perf_app_20260928_140122
+[report] wrote /home/osuser/saadi/M/Muzzammil/perf-testing-v3/perf-test-20260928_140053/PERF_Report_20260928_142319.html
+[✓] report: /home/osuser/saadi/M/Muzzammil/perf-testing-v3/perf-test-20260928_140053/PERF_Report_20260928_142319.html
 [osuser@bastion perf-testing-v3]$ ll
-total 7392
+ctotal 4264
 -rw-r----- 1 osuser osuser    5401 Aug 31 11:31 alloc_parse.py
 -rw-r----- 1 osuser osuser    3596 Aug 31 11:31 app_parse.py
 -rw-r----- 1 osuser osuser    7253 Aug 31 11:33 capacity_parse.py
 -rw-r----- 1 osuser osuser    1999 Aug 31 11:32 cap_extras.py
 -rw-r----- 1 osuser osuser   22631 Sep  3 12:07 infra_parse.py
 -rw-r----- 1 osuser osuser   55201 Sep 28 13:36 net_report.py
--rwxr-x--- 1 osuser osuser   11308 Sep 28 13:36 perf-all.sh
+-rw-r----- 1 osuser osuser   23121 Sep 28 13:58 nodenet_1351.csv
+-rwxr-x--- 1 osuser osuser   16061 Sep 28 14:00 perf-all.sh
 -rwxr-x--- 1 osuser osuser    6140 Sep  3 15:40 perf-app.sh
 -rwxr-x--- 1 osuser osuser    4284 Aug 31 11:34 perf-capacity.sh
 -rwxr-x--- 1 osuser osuser   12210 Sep  2 12:17 perf-infra.sh
 -rw-r----- 1 osuser osuser   49945 Sep  2 12:16 perf_report.py
 -rwxr-x--- 1 osuser osuser    3054 Aug 31 11:37 perf-run.sh
-drwxr-x--- 6 osuser osuser    4096 Sep 28 13:44 perf-test-20260928_133715
--rw-r----- 1 osuser osuser 7358909 Sep 28 13:16 sript-test.zip
-[osuser@bastion perf-testing-v3]$ cd perf-test-20260928_133715
-[osuser@bastion perf-test-20260928_133715]$ ll
-total 4020
-drwxr-x--- 3 osuser osuser     139 Sep 28 13:42 perf_app_20260928_133745
--rw-r----- 1 osuser osuser  429435 Sep 28 13:42 perf_app_20260928_133745.zip
-drwxr-x--- 3 osuser osuser    4096 Sep 28 13:44 perf_capacity_after_20260928_134357
--rw-r----- 1 osuser osuser  425537 Sep 28 13:44 perf_capacity_after_20260928_134357.zip
-drwxr-x--- 3 osuser osuser    4096 Sep 28 13:37 perf_capacity_before_20260928_133715
--rw-r----- 1 osuser osuser  408250 Sep 28 13:37 perf_capacity_before_20260928_133715.zip
-drwxr-x--- 3 osuser osuser    4096 Sep 28 13:43 perf_infra_20260928_133745
--rw-r----- 1 osuser osuser 2783926 Sep 28 13:43 perf_infra_20260928_133745.zip
--rw-r----- 1 osuser osuser   50687 Sep 28 13:44 PERF_Report_20260928_134412.html
-[osuser@bastion perf-test-20260928_133715]$ pwd
-/home/osuser/saadi/M/Muzzammil/perf-testing-v3/perf-test-20260928_133715
-[osuser@bastion perf-test-20260928_133715]$ rm -rf *.zip
-[osuser@bastion perf-test-20260928_133715]$ ll
-total 64
-drwxr-x--- 3 osuser osuser   139 Sep 28 13:42 perf_app_20260928_133745
-drwxr-x--- 3 osuser osuser  4096 Sep 28 13:44 perf_capacity_after_20260928_134357
-drwxr-x--- 3 osuser osuser  4096 Sep 28 13:37 perf_capacity_before_20260928_133715
-drwxr-x--- 3 osuser osuser  4096 Sep 28 13:43 perf_infra_20260928_133745
--rw-r----- 1 osuser osuser 50687 Sep 28 13:44 PERF_Report_20260928_134412.html
-[osuser@bastion perf-test-20260928_133715]$
+drwxr-x--- 6 osuser osuser    4096 Sep 28 13:46 perf-test-20260928_133715
+drwxr-x--- 6 osuser osuser    4096 Sep 28 14:23 perf-test-20260928_140053
+-rw-r----- 1 osuser osuser 4118767 Sep 28 13:47 sript-test.zip
+-rw-r----- 1 osuser osuser     602 Sep 28 13:58 traffic_1351.csv
+[osuser@bastion perf-testing-v3]$ cd perf-test-20260928_140053
+[osuser@bastion perf-test-20260928_140053]$ ll
+total 8740
+drwxr-x--- 3 osuser osuser     139 Sep 28 14:16 perf_app_20260928_140122
+-rw-r----- 1 osuser osuser   21425 Sep 28 14:16 perf_app_20260928_140122.zip
+drwxr-x--- 3 osuser osuser    4096 Sep 28 14:23 perf_capacity_after_20260928_142259
+-rw-r----- 1 osuser osuser  408253 Sep 28 14:23 perf_capacity_after_20260928_142259.zip
+drwxr-x--- 3 osuser osuser    4096 Sep 28 14:01 perf_capacity_before_20260928_140053
+-rw-r----- 1 osuser osuser  408399 Sep 28 14:01 perf_capacity_before_20260928_140053.zip
+drwxr-x--- 3 osuser osuser    4096 Sep 28 14:16 perf_infra_20260928_140122
+-rw-r----- 1 osuser osuser 8044212 Sep 28 14:16 perf_infra_20260928_140122.zip
+-rw-r----- 1 osuser osuser   48719 Sep 28 14:23 PERF_Report_20260928_142319.html
+[osuser@bastion perf-test-20260928_140053]$ rm -rf *.zip
+[osuser@bastion perf-test-20260928_140053]$ ll
+total 60
+drwxr-x--- 3 osuser osuser   139 Sep 28 14:16 perf_app_20260928_140122
+drwxr-x--- 3 osuser osuser  4096 Sep 28 14:23 perf_capacity_after_20260928_142259
+drwxr-x--- 3 osuser osuser  4096 Sep 28 14:01 perf_capacity_before_20260928_140053
+drwxr-x--- 3 osuser osuser  4096 Sep 28 14:16 perf_infra_20260928_140122
+-rw-r----- 1 osuser osuser 48719 Sep 28 14:23 PERF_Report_20260928_142319.html
+[osuser@bastion perf-test-20260928_140053]$

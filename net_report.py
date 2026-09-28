@@ -56,6 +56,10 @@ def short_ts(t):
     """'2026-09-27 14:31:02' -> '14:31:02'"""
     return t.split(" ")[-1] if t else "–"
 
+def esc(t):
+    return (str(t).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
 def grp(n):
     n = (n or "").lower()
     if n.startswith(("master", "infra", "zookeeper")):
@@ -72,89 +76,131 @@ GROUPS = [
 
 # -------------------------------------------------------------------- CSS ---
 CSS = """<style>
-:root{--bg:#eef2f7;--card:#fff;--ink:#16212e;--mut:#5b6b7b;--line:#dce4ec;--band:#f2f6fa;
---head:#16324a;--accent:#2563a8;--good:#1a7f4b;--warn:#b7791f;--bad:#c0392b;--shadow:0 2px 8px rgba(20,40,60,.08);}
+/* Theme: "telemetry" — deep teal chrome, light table headers, left-aligned rails.
+   Deliberately distinct from the navy PERF capacity report so the two are never
+   mistaken for each other at a glance.
+   Series colours are the validated categorical order (slots 1-5). */
+:root{
+  --bg:#f1f3f2; --card:#fff; --ink:#0f1f1e; --mut:#55655f;
+  --line:#dbe3e0; --band:#f4f7f6; --band2:#e8efed;
+  --head:#0f3b39; --head2:#14514c; --accent:#0d7a6f; --accent-soft:#e2f1ee;
+  --good-ink:#146c14; --warn-ink:#8a5d00; --bad-ink:#a92f2f;
+  --good-bg:#e4f5e4; --warn-bg:#fdf1d8; --bad-bg:#fbe6e6;
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100; --s5:#e87ba4;
+  --grid:#e2e8e6; --axis:#c2ccc9;
+  --shadow:0 1px 2px rgba(15,59,57,.06),0 3px 12px rgba(15,59,57,.06);
+}
 *{box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+body{font-family:system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
 margin:0;background:var(--bg);color:var(--ink);font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased}
-.wrap{max-width:1600px;margin:0 auto;padding:24px 40px}
-@media(max-width:640px){.wrap{padding:12px}}
-h1{font-size:22px;margin:0 0 4px}
-h2{font-size:17px;color:var(--head);margin:34px 0 14px;scroll-margin-top:60px;padding-bottom:8px;
-border-bottom:2px solid var(--accent);text-align:center}
-h3{font-size:13px;color:var(--mut);margin:18px 0 8px;text-transform:uppercase;letter-spacing:.04em}
-.masthead{background:linear-gradient(135deg,#16324a,#2563a8);color:#fff;padding:24px 26px;border-radius:12px;
-box-shadow:var(--shadow);animation:fadeDown .5s ease}
-.masthead .sub{opacity:.92;font-size:12.5px;margin-top:6px}
-.masthead a{color:#cfe3ff;text-decoration:none;transition:opacity .2s}.masthead a:hover{opacity:.7}
-@keyframes fadeDown{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:none}}
-@keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
-.verdict,section,table,.kpi,.findings li,.chart{animation:fadeUp .4s ease both}
-.verdict{background:var(--card);border-left:5px solid var(--accent);border-radius:10px;padding:16px 20px;
-margin:16px 0;font-size:15px;box-shadow:var(--shadow)}
-.verdict.good{border-left-color:var(--good)}.verdict.warn{border-left-color:var(--warn)}
-.verdict.bad{border-left-color:var(--bad)}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin:14px 0}
-.kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;box-shadow:var(--shadow);
-transition:transform .2s,box-shadow .2s}
-.kpi:hover{transform:translateY(-2px);box-shadow:0 6px 16px rgba(20,40,60,.12)}
-.kpi .lbl{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.04em}
-.kpi .val{font-size:21px;font-weight:600;margin-top:4px}
-.kpi .val.good{color:var(--good)}.kpi .val.warn{color:var(--warn)}.kpi .val.bad{color:var(--bad)}
-.kpi .sub{font-size:11.5px;color:var(--mut);margin-top:2px}
+.wrap{max-width:1600px;margin:0 auto;padding:26px 40px 60px}
+@media(max-width:640px){.wrap{padding:14px}}
+h1{font-size:23px;margin:0;letter-spacing:-.01em}
+
+/* ---- masthead: solid deep teal, left rail, monospace kicker ---- */
+.masthead{background:var(--head);color:#fff;padding:24px 28px;border-radius:4px;
+border-left:6px solid var(--accent);position:relative;overflow:hidden}
+.masthead::after{content:"";position:absolute;inset:0;pointer-events:none;
+background:repeating-linear-gradient(135deg,rgba(255,255,255,.04) 0 1px,transparent 1px 11px)}
+.masthead .kick{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;
+letter-spacing:.18em;text-transform:uppercase;color:#7fd4c7;margin-bottom:9px}
+.masthead .sub{opacity:.85;font-size:12.5px;margin-top:7px}
+.masthead a{color:#9fe0d5;text-decoration:none;border-bottom:1px solid rgba(159,224,213,.35)}
+.masthead a:hover{color:#fff;border-bottom-color:#fff}
+
+/* ---- nav: monospace ticks, no boxes ---- */
+.navbtns{display:flex;flex-wrap:wrap;gap:0;margin:0 0 6px;border-bottom:1px solid var(--line)}
+.navbtns a{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;padding:11px 15px;
+color:var(--mut);text-decoration:none;border-bottom:2px solid transparent;margin-bottom:-1px;
+transition:color .15s,border-color .15s}
+.navbtns a:hover{color:var(--accent);border-bottom-color:var(--accent)}
+
+/* ---- headings: left rail, no centring ---- */
+h2{font-size:16px;color:var(--head);margin:30px 0 12px;scroll-margin-top:20px;
+padding:0 0 0 13px;border-left:4px solid var(--accent);text-align:left;font-weight:700;
+letter-spacing:-.005em}
+h3{font-size:11px;color:var(--mut);margin:20px 0 7px;text-transform:uppercase;
+letter-spacing:.12em;font-weight:700;font-family:ui-monospace,Menlo,Consolas,monospace}
+
+/* ---- group band: rule + left label, not a centred pill ---- */
+.groupband{margin:46px 0 4px;border-top:2px solid var(--head);padding-top:11px}
+.groupband h2.group{display:block;font-size:19px;font-weight:700;color:var(--head);
+background:none;padding:0;border:none;margin:0;letter-spacing:-.01em}
+.groupband .gsub{display:block;color:var(--mut);font-size:12.5px;margin-top:3px}
+
+/* ---- verdict ---- */
+.verdict{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--accent);
+border-radius:3px;padding:15px 19px;margin:16px 0;font-size:14.5px;box-shadow:var(--shadow)}
+.verdict.good{border-left-color:var(--good-ink)}
+.verdict.warn{border-left-color:var(--warn-ink)}
+.verdict.bad{border-left-color:var(--bad-ink)}
+
+/* ---- KPI tiles: top accent bar, tabular figures ---- */
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(172px,1fr));gap:10px;margin:14px 0}
+.kpi{background:var(--card);border:1px solid var(--line);border-top:3px solid var(--accent);
+border-radius:3px;padding:13px 15px 14px;box-shadow:var(--shadow)}
+.kpi .lbl{font-size:10.5px;color:var(--mut);text-transform:uppercase;letter-spacing:.1em;
+font-family:ui-monospace,Menlo,Consolas,monospace}
+.kpi .val{font-size:22px;font-weight:650;margin-top:5px;letter-spacing:-.02em}
+.kpi .val.good{color:var(--good-ink)}.kpi .val.warn{color:var(--warn-ink)}
+.kpi .val.bad{color:var(--bad-ink)}
+.kpi .val.sm{font-size:16px;letter-spacing:0;line-height:1.35}
+.kpi .sub{font-size:11.5px;color:var(--mut);margin-top:3px;line-height:1.4}
+
+/* ---- findings ---- */
 .findings{list-style:none;padding:0;margin:10px 0}
-.findings li{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:11px 15px;margin:7px 0;
-border-left:3px solid var(--accent);box-shadow:var(--shadow)}
-.findings li.warn{border-left-color:var(--warn)}.findings li.bad{border-left-color:var(--bad)}
-.findings li.good{border-left-color:var(--good)}.findings li.noise{border-left-color:var(--mut);color:var(--mut)}
-details{margin:12px 0;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:4px 14px;
-box-shadow:var(--shadow)}
-summary{cursor:pointer;color:var(--accent);font-size:13px;font-weight:600;padding:8px 0;user-select:none}
+.findings li{background:var(--card);border:1px solid var(--line);border-radius:3px;
+padding:11px 15px;margin:6px 0;border-left:3px solid var(--accent);box-shadow:var(--shadow)}
+.findings li.warn{border-left-color:var(--warn-ink)}
+.findings li.bad{border-left-color:var(--bad-ink)}
+.findings li.good{border-left-color:var(--good-ink)}
+.findings li.noise{border-left-color:var(--axis);color:var(--mut)}
+
+details{margin:10px 0;background:var(--card);border:1px solid var(--line);border-radius:3px;padding:2px 14px}
+summary{cursor:pointer;color:var(--accent);font-size:12.5px;font-weight:600;padding:9px 0;user-select:none;
+font-family:ui-monospace,Menlo,Consolas,monospace}
 summary:hover{color:var(--head)}
-.tbl-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:8px}
+
+/* ---- tables: LIGHT header with a rule, not a solid dark bar ---- */
+.tbl-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
 table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);
-border-radius:8px;overflow:hidden;margin:8px 0;font-size:13px;box-shadow:var(--shadow)}
-th{background:var(--head);color:#fff;text-align:left;padding:8px 11px;font-size:12px;white-space:nowrap}
+border-radius:3px;margin:8px 0;font-size:13px;box-shadow:var(--shadow)}
+th{background:var(--band2);color:var(--head);text-align:left;padding:9px 11px;font-size:11px;
+white-space:nowrap;text-transform:uppercase;letter-spacing:.07em;font-weight:700;
+border-bottom:2px solid var(--head);font-family:ui-monospace,Menlo,Consolas,monospace}
 td{padding:7px 11px;border-top:1px solid var(--line);white-space:nowrap}
 tr:nth-child(even) td{background:var(--band)}
-tbody tr:hover td{background:#e8f0f8}
+tbody tr:hover td{background:var(--accent-soft)}
 td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
-tr.sub td{font-weight:600;background:#e9eff6!important;border-top:2px solid var(--line)}
-tr.tot td{font-weight:700;color:var(--accent);background:#eaf2fb!important;border-top:2px solid var(--accent)}
-.grouphdr td{background:var(--head)!important;color:#fff;font-weight:700;font-size:12px;
-text-transform:uppercase;letter-spacing:.05em}
-.grouphdr td span{font-weight:400;text-transform:none;letter-spacing:0;opacity:.85;margin-left:8px}
+tr.sub td{font-weight:650;background:var(--band2)!important;border-top:1px solid var(--axis)}
+tr.tot td{font-weight:700;color:var(--head);background:var(--accent-soft)!important;
+border-top:2px solid var(--accent);border-bottom:2px solid var(--accent)}
+.grouphdr td{background:var(--head2)!important;color:#fff;font-weight:700;font-size:11px;
+text-transform:uppercase;letter-spacing:.1em;font-family:ui-monospace,Menlo,Consolas,monospace}
+.grouphdr td span{font-weight:400;text-transform:none;letter-spacing:0;opacity:.8;margin-left:10px;
+font-family:system-ui,sans-serif;font-size:12px}
+
 .muted{color:var(--mut);font-size:12.5px}
 .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
-.pill{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;font-weight:600}
-.pill.good{background:#e3f4ea;color:var(--good)}.pill.warn{background:#fdf3e0;color:var(--warn)}
-.pill.bad{background:#fbe9e7;color:var(--bad)}.pill.mut{background:#eceff3;color:var(--mut)}
-.bar{display:inline-block;height:9px;border-radius:4px;background:var(--accent);vertical-align:middle}
-.bar.warn{background:var(--warn)}.bar.bad{background:var(--bad)}.bar.mut{background:#9fb0c0}
-.chart{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 6px 4px;
-box-shadow:var(--shadow);margin:12px 0;overflow-x:auto}
-.legend{font-size:12px;color:var(--mut);padding:2px 14px 8px}
-.legend i{display:inline-block;width:11px;height:11px;border-radius:3px;margin:0 5px 0 14px;vertical-align:-1px}
+.pill{display:inline-block;padding:1px 8px;border-radius:2px;font-size:11px;font-weight:700;
+font-variant-numeric:tabular-nums}
+.pill.good{background:var(--good-bg);color:var(--good-ink)}
+.pill.warn{background:var(--warn-bg);color:var(--warn-ink)}
+.pill.bad{background:var(--bad-bg);color:var(--bad-ink)}
+.pill.mut{background:var(--band2);color:var(--mut)}
+.bar{display:inline-block;height:8px;border-radius:2px;background:var(--accent);vertical-align:middle}
+.bar.warn{background:#fab219}.bar.bad{background:#d03b3b}.bar.mut{background:var(--axis)}
+
+.chart{background:var(--card);border:1px solid var(--line);border-radius:3px;
+padding:12px 8px 6px;box-shadow:var(--shadow);margin:10px 0;overflow-x:auto}
+.legend{font-size:12px;color:var(--mut);padding:2px 12px 8px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin:0 6px 0 16px;vertical-align:-1px}
 .legend i:first-child{margin-left:0}
-.groupband{text-align:center;margin:44px 0 10px}
-.groupband h2.group{display:inline-block;font-size:19px;font-weight:700;color:#fff;
-background:linear-gradient(135deg,#16324a,#2563a8);padding:10px 30px;border-radius:30px;border:none;
-box-shadow:0 4px 14px rgba(37,99,168,.3);letter-spacing:.03em;margin:0}
-.groupband .gsub{display:block;color:var(--mut);font-size:12.5px;margin-top:8px;font-style:italic}
-.navbtns{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin:18px 0 8px}
-.navbtns a{display:inline-flex;align-items:center;justify-content:center;min-width:42px;height:38px;
-padding:0 14px;background:var(--card);border:1.5px solid var(--accent);border-radius:9px;color:var(--accent);
-text-decoration:none;font-size:13px;font-weight:600;transition:all .2s cubic-bezier(.2,.8,.3,1);
-box-shadow:0 2px 6px rgba(20,40,60,.08)}
-.navbtns a:hover{background:var(--accent);color:#fff;transform:translateY(-3px) scale(1.05);
-box-shadow:0 6px 16px rgba(37,99,168,.35)}
-span[id]{scroll-margin-top:60px;display:block}
-pre.copy{background:#16212e;color:#e6edf3;border-radius:8px;padding:14px 16px;font-size:12.5px;
-overflow-x:auto;line-height:1.55;margin:10px 0}
-@media(max-width:640px){h2{font-size:15px}.kpi .val{font-size:18px}
-.navbtns a{min-width:36px;height:34px;padding:0 10px;font-size:12px}
-.groupband h2.group{font-size:15px;padding:8px 18px}}
-@media print{.navbtns,details summary{display:none}body{background:#fff}.wrap{padding:0}}
+span[id]{scroll-margin-top:20px;display:block}
+@media(max-width:640px){h2{font-size:14px}.kpi .val{font-size:19px}
+.groupband h2.group{font-size:16px}.navbtns a{padding:9px 10px;font-size:11px}}
+@media print{.navbtns{display:none}body{background:#fff}.wrap{padding:0}
+details{border:none}details summary{display:none}details[open]{display:block}}
 </style>"""
 
 
@@ -170,6 +216,9 @@ def _nice(v):
         if v <= m * base:
             return m * base
     return 10 * base
+
+
+S1, S2, S3, S4, S5 = "#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4"
 
 
 def svg_chart(series, width=1140, height=270, ylab="", xfmt=None, ymax=None):
@@ -200,9 +249,9 @@ def svg_chart(series, width=1140, height=270, ylab="", xfmt=None, ymax=None):
         v = ytop * k / 4.0
         y = Y(v)
         o.append(f'<line x1="{PL}" y1="{y:.1f}" x2="{width-PR}" y2="{y:.1f}" '
-                 f'stroke="#dce4ec" stroke-width="1"/>')
+                 f'stroke="#e2e8e6" stroke-width="1"/>')
         lab = f"{v:,.0f}" if ytop >= 10 else f"{v:,.1f}"
-        o.append(f'<text x="{PL-8}" y="{y+4:.1f}" font-size="11" fill="#5b6b7b" '
+        o.append(f'<text x="{PL-8}" y="{y+4:.1f}" font-size="11" fill="#55655f" '
                  f'text-anchor="end">{lab}</text>')
     # x ticks
     nt = 7
@@ -210,16 +259,16 @@ def svg_chart(series, width=1140, height=270, ylab="", xfmt=None, ymax=None):
         v = x0 + (x1 - x0) * k / (nt - 1)
         x = X(v)
         o.append(f'<line x1="{x:.1f}" y1="{PT+ih}" x2="{x:.1f}" y2="{PT+ih+4}" '
-                 f'stroke="#9fb0c0" stroke-width="1"/>')
+                 f'stroke="#c2ccc9" stroke-width="1"/>')
         lab = xfmt(v) if xfmt else f"{v:,.0f}s"
-        o.append(f'<text x="{x:.1f}" y="{PT+ih+18}" font-size="11" fill="#5b6b7b" '
+        o.append(f'<text x="{x:.1f}" y="{PT+ih+18}" font-size="11" fill="#55655f" '
                  f'text-anchor="middle">{lab}</text>')
     if ylab:
-        o.append(f'<text x="4" y="{PT+10}" font-size="11" fill="#5b6b7b">{ylab}</text>')
+        o.append(f'<text x="4" y="{PT+10}" font-size="11" fill="#55655f">{ylab}</text>')
     # series
     for s in series:
         pts = sorted(s["pts"])
-        col = s.get("color", "#2563a8")
+        col = s.get("color", S1)
         d = " ".join(f"{X(a):.1f},{Y(b):.1f}" for a, b in pts)
         if s.get("area"):
             o.append(f'<polygon points="{X(pts[0][0]):.1f},{PT+ih:.1f} {d} '
@@ -228,13 +277,26 @@ def svg_chart(series, width=1140, height=270, ylab="", xfmt=None, ymax=None):
                  f'stroke-linejoin="round" stroke-linecap="round"/>')
         # peak marker — stagger labels so overlaid series do not collide
         px, py = max(pts, key=lambda p: p[1])
-        o.append(f'<circle cx="{X(px):.1f}" cy="{Y(py):.1f}" r="3.6" fill="{col}"/>')
+        o.append(f'<circle cx="{X(px):.1f}" cy="{Y(py):.1f}" r="4" fill="{col}" '
+                 f'stroke="#fff" stroke-width="2"/>')
         tx = min(max(X(px), PL + 34), width - PR - 34)
-        ty = max(Y(py) - 9 - 14 * series.index(s), PT + 10)
+        ty = max(Y(py) - 11 - 14 * series.index(s), PT + 10)
         o.append(f'<text x="{tx:.1f}" y="{ty:.1f}" font-size="11" '
-                 f'font-weight="600" fill="{col}" text-anchor="middle">{py:,.0f}</text>')
+                 f'font-weight="700" fill="{col}" text-anchor="middle">{py:,.0f}</text>')
+    # hover read-out — one transparent band per sample, native <title>, no JS
+    xset = sorted({a for s in series for a, _ in s["pts"]})
+    if 1 < len(xset) <= 800:
+        bw = iw / len(xset)
+        lut = [dict(s["pts"]) for s in series]
+        for xv in xset:
+            parts = [f'{(s.get("name") or "value")} {m[xv]:,.1f}'
+                     for s, m in zip(series, lut) if xv in m]
+            lbl = xfmt(xv) if xfmt else f"{xv:,.0f}s"
+            t = esc(lbl + "  —  " + ", ".join(parts))
+            o.append(f'<rect x="{X(xv)-bw/2:.1f}" y="{PT}" width="{max(bw,1):.2f}" '
+                     f'height="{ih:.1f}" fill="transparent"><title>{t}</title></rect>')
     o.append(f'<line x1="{PL}" y1="{PT+ih}" x2="{width-PR}" y2="{PT+ih}" '
-             f'stroke="#9fb0c0" stroke-width="1"/>')
+             f'stroke="#c2ccc9" stroke-width="1"/>')
     o.append("</svg>")
     return "".join(o)
 
@@ -384,26 +446,25 @@ def sec_window(w):
              'It is read from every <span class="mono">perf-istio-gateway</span> pod and differenced against a '
              'baseline taken before the window opened, so it counts <b>only</b> this window.</p>')
     h.append('<div class="grid">')
-    h.append(kpi("OCP received", n0(w.total), "good",
-                 "give this number to the LB team"))
+    h.append(kpi("OCP received", n0(w.total), "",
+                 "measured at the ingress gateway"))
     h.append(kpi("Average rate", f1(w.avg_rps, " req/s"), "",
                  f"over the whole {f1(w.duration/60)} min"))
     h.append(kpi("Steady-state rate", f1(w.steady_avg, " req/s"), "",
                  f"{w.steady_n} samples ≥70% of peak"))
-    h.append(kpi("Peak rate", f1(w.peak_rps, " req/s"), "warn" if w.peak_rps else "",
+    h.append(kpi("Peak rate", f1(w.peak_rps, " req/s"), "",
                  f"at {short_ts(w.peak_at)} IST"))
     h.append(kpi("Duration", f"{f1(w.duration/60)} min", "",
                  f"{w.samples} samples @ {f1(w.interval)}s"))
-    h.append(kpi("Window (IST)", short_ts(w.start) + " → " + short_ts(w.end), "",
+    h.append(kpi("Window (IST)", short_ts(w.start) + " → " + short_ts(w.end), "sm",
                  w.start.split(" ")[0] if w.start else ""))
     h.append("</div>")
 
     h.append('<h3>Request rate across the window</h3>')
     h.append('<div class="chart">' +
-             svg_chart([{"name": "req/s", "color": "#2563a8",
+             svg_chart([{"name": "req/s", "color": S1,
                          "pts": w.rate_pts, "area": True}],
                        ylab="req/s", xfmt=xfmt_for(w)) + "</div>")
-    h.append(legend([("Gateway ingress (req/s)", "#2563a8")]))
 
     # phase table
     h.append('<h3>Shape of the window</h3>')
@@ -431,12 +492,12 @@ def sec_funnel(w):
     h = ['<h2>2 · JMeter → AVLB → OCP funnel</h2>']
     h.append('<p class="muted">Each stage should be within a fraction of a percent of the one above it. '
              'A gap tells you which hop is dropping requests. Fill the JMeter and AVLB rows from the '
-             'JMeter summary and the LB team\'s reply — the OCP rows are measured by this report.</p>')
+             'JMeter summary and the load-balancer statistics — the OCP rows are measured by this report.</p>')
     lb = w.lb
     stages = [
         ("1 · JMeter sent", lb.get("jmeter"), "JMeter aggregate report — total samples across all 5 injectors"),
-        ("2 · AVLB received", lb.get("avlb_recv"), "LB team — client-side connections/requests on the VIP"),
-        ("3 · AVLB forwarded to OCP", lb.get("avlb_fwd"), "LB team — server-side requests to the OCP pool members"),
+        ("2 · AVLB received", lb.get("avlb_recv"), "load balancer — client-side connections/requests on the VIP"),
+        ("3 · AVLB forwarded to OCP", lb.get("avlb_fwd"), "load balancer — server-side requests to the OCP pool members"),
         ("4 · OCP gateway received", w.total, "<b>measured here</b> — istio ingress gateway counter"),
         ("5 · Delivered to app pods", w.node_fg, "<b>measured here</b> — sidecar counters, first hop from gateway"),
     ]
@@ -480,19 +541,9 @@ def sec_funnel(w):
     h.append(f'<div class="verdict {cls}"><b>Gateway → pods: {n0(w.total)} vs {n0(w.node_fg)} '
              f'({p:.2f}% apart).</b> {msg}</div>')
 
-    h.append('<h3>Window details to send the LB team</h3>')
-    h.append('<pre class="copy">Window tag   : ' + w.tag +
-             '\nDate         : ' + (w.start.split(" ")[0] if w.start else "?") +
-             '\nStart (IST)  : ' + short_ts(w.start) +
-             '\nEnd   (IST)  : ' + short_ts(w.end) +
-             '\nDuration     : ' + f"{w.duration:.0f}s ({w.duration/60:.1f} min)" +
-             '\nOCP received : ' + n0(w.total) + ' requests' +
-             '\nAverage rate : ' + f1(w.avg_rps) + ' req/s' +
-             '\nPeak rate    : ' + f1(w.peak_rps) + ' req/s at ' + short_ts(w.peak_at) +
-             '</pre>')
-    h.append('<p class="muted">Timezone is IST (Asia/Kolkata) throughout — confirm the LB appliance is '
-             'reporting in the same zone before comparing, a 30-minute offset is the usual culprit when totals '
-             'look wildly different.</p>')
+    h.append('<p class="muted">All timestamps are IST (Asia/Kolkata). Confirm the upstream figures are '
+             'reported in the same zone before comparing — a timezone offset is the usual reason two totals '
+             'for the same window look nothing alike.</p>')
     return "".join(h)
 
 
@@ -577,10 +628,10 @@ def sec_nodes(w, nic_gbps):
     if prx or ptx:
         h.append('<h3>Cluster network throughput across the window</h3>')
         h.append('<div class="chart">' + svg_chart(
-            [{"name": "RX", "color": "#2563a8", "pts": prx, "area": True},
-             {"name": "TX", "color": "#b7791f", "pts": ptx}],
+            [{"name": "RX", "color": S1, "pts": prx, "area": True},
+             {"name": "TX", "color": S2, "pts": ptx}],
             ylab="Mbps", xfmt=xfmt_for(w)) + "</div>")
-        h.append(legend([("RX — into the nodes", "#2563a8"), ("TX — out of the nodes", "#b7791f")]))
+        h.append(legend([("RX — into the nodes", S1), ("TX — out of the nodes", S2)]))
     return "".join(h)
 
 
@@ -597,7 +648,7 @@ def sec_balance(w):
     h.append('<div class="grid">')
     h.append(kpi("Worker nodes serving", str(n), "", "nodes with gateway traffic"))
     h.append(kpi("Even share would be", n0(even), "", "requests per node"))
-    h.append(kpi("Busiest node", n0(w.w_max), "warn" if w.w_max > 1.5 * w.w_mean else "",
+    h.append(kpi("Busiest node", n0(w.w_max), "warn" if w.w_mean and w.w_max > 1.5 * w.w_mean else "",
                  f"{w.w_max/w.w_mean:.2f}× the mean" if w.w_mean else ""))
     h.append(kpi("Quietest node", n0(w.w_min), "",
                  f"{w.w_min/w.w_mean:.2f}× the mean" if w.w_mean else ""))
@@ -726,7 +777,7 @@ def sec_compare(wins):
     h.append("</table></div>")
 
     # overlay chart of rate
-    cols = ["#2563a8", "#b7791f", "#1a7f4b", "#c0392b", "#7048a8"]
+    cols = [S1, S2, S3, S4, S5]
     series, leg = [], []
     for i, w in enumerate(wins):
         c = cols[i % len(cols)]
@@ -786,7 +837,7 @@ def verdict(wins):
     worst_recon = max(x.recon_pct for x in wins)
     if worst_recon < 1:
         bits.append("Gateway and pod counters reconcile to within 1%, so the ingress total is trustworthy "
-                    "as the number to give the LB team.")
+                    "as the authoritative count of what reached the cluster.")
     elif worst_recon < 3:
         bits.append(f"Gateway and pod counters differ by up to {worst_recon:.2f}% — small enough to be "
                     "snapshot skew, but check gateway 5xx if it grows.")
@@ -828,15 +879,17 @@ def build(wins, nic_gbps):
     H = ['<!doctype html><html><head><meta charset="utf-8">'
          '<meta name="viewport" content="width=device-width, initial-scale=1">'
          '<title>PERF Network Report</title>', CSS, '</head><body><div class="wrap">']
-    H.append('<div class="masthead"><h1>SBI ePay 2.0 — PERF Network &amp; Traffic Report</h1>'
+    H.append('<div class="masthead">'
+             '<div class="kick">Network &amp; Traffic · OCP Ingress Measurement</div>'
+             '<h1>SBI ePay 2.0 — PERF</h1>'
              f'<div class="sub">Prepared by Saadi M Muzzammil · generated {now}</div>'
-             f'<div class="sub" style="margin-top:4px">Windows: {tags} · '
+             f'<div class="sub">Windows: {esc(tags)} · '
              f'source: perf-all.sh gateway counters + node-exporter + istio sidecars</div>'
-             '<div class="sub" style="margin-top:8px">'
+             '<div class="sub" style="margin-top:11px">'
              '<a href="https://oneviewuat.sbi/" target="_blank" rel="noopener" '
-             'style="margin-right:16px">Dynatrace ↗</a>'
+             'style="margin-right:18px">Dynatrace ↗</a>'
              '<a href="https://console-openshift-console.apps.preprod.epay.sbi/" target="_blank" '
-             'rel="noopener" style="margin-right:16px">OCP Console ↗</a>'
+             'rel="noopener" style="margin-right:18px">OCP Console ↗</a>'
              '<a href="http://10.177.139.68:3000/" target="_blank" rel="noopener">Grafana ↗</a>'
              '</div></div>')
     multi = len(wins) > 1

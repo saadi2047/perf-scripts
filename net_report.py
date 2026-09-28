@@ -17,7 +17,7 @@
 #
 # Read-only. No cluster access — it only parses the CSVs.
 # ============================================================================
-import os, csv, argparse, datetime
+import os, re, csv, argparse, datetime
 
 # ---------------------------------------------------------------- helpers ---
 def read_csv(p):
@@ -55,6 +55,11 @@ def pct(a, b):
 def short_ts(t):
     """'2026-09-27 14:31:02' -> '14:31:02'"""
     return t.split(" ")[-1] if t else "–"
+
+# A node name that is really an AGE string ("51m", "3h", "10d") or "<none>" means
+# the capture mis-parsed its pod->node mapping. Never treat it as a node.
+NOT_A_NODE = re.compile(r'^(\d+(\.\d+)?[smhdwy]|<none>|none|)$', re.I)
+
 
 def esc(t):
     return (str(t).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
@@ -362,9 +367,13 @@ class Window:
         self.ts_g = {0: {}, 1: {}, 2: {}} # group -> ts -> [rx, tx] Mbps
         self.ts_el = {}                   # ts -> elapsed (aligned to traffic)
         el_by_ts = {r["ts_ist"]: F(r.get("elapsed_s")) for r in t}
+        self.bad_nodes = {}
         for r in self.nodenet:
             n = (r.get("node") or "").strip()
-            if not n:
+            if NOT_A_NODE.match(n):
+                # keep the evidence so the report can say the capture needs fixing
+                self.bad_nodes[n] = max(self.bad_nodes.get(n, 0.0),
+                                        F(r.get("all_received")))
                 continue
             d = self.nodes.setdefault(n, dict(
                 rx=[], tx=[], rp=[], tp=[], ct=[], fg=0.0, al=0.0, g=grp(n)))
@@ -407,13 +416,16 @@ class Window:
         self.ew_ratio = (self.node_al / self.node_fg) if self.node_fg else 0.0
         self.ct_pk = max((d["ct_pk"] for d in self.nodes.values()), default=0.0)
 
-        # worker balance
-        w = [(n, d) for n, d in self.nodes.items() if d["g"] == 1 and d["fg"] > 0]
-        self.wnodes = sorted(w, key=lambda kv: -kv[1]["fg"])
-        fgs = [d["fg"] for _, d in w]
-        self.w_mean = (sum(fgs) / len(fgs)) if fgs else 0.0
-        self.w_max = max(fgs, default=0.0)
-        self.w_min = min(fgs, default=0.0)
+        # Worker balance is measured on ALL RCVD — every request the pods on that
+        # node served. FROM GW only counts requests whose FIRST hop was the gateway,
+        # so a node hosting only internally-called services reads as idle on it while
+        # doing the most work in the cluster. Keep FROM GW for the reconciliation.
+        w = [(n, d) for n, d in self.nodes.items() if d["g"] == 1 and d["al"] > 0]
+        self.wnodes = sorted(w, key=lambda kv: -kv[1]["al"])
+        als = [d["al"] for _, d in w]
+        self.w_mean = (sum(als) / len(als)) if als else 0.0
+        self.w_max = max(als, default=0.0)
+        self.w_min = min(als, default=0.0)
         self.w_skew = (self.w_max / self.w_min) if self.w_min > 0 else 0.0
 
     def chart_series_net(self):
@@ -555,22 +567,38 @@ def sec_nodes(w, nic_gbps):
              '<b>RX</b> = data arriving at the node NIC · <b>TX</b> = data leaving it · '
              '<b>pkt/s</b> = packet rate · <b>conntrack</b> = connections the kernel is tracking · '
              '<b>FROM GW</b> = requests whose first hop was the ingress gateway (reconciles with section 1) · '
-             '<b>ALL RCVD</b> = every request the pods on that node served, including service-to-service.'
+             '<b>ALL RCVD</b> = every request the pods on that node served, including service-to-service · '
+             '<b>share of work</b> = that node\'s slice of ALL RCVD · '
+             '<b>GW-facing</b> = how much of the node\'s work arrived straight from the gateway '
+             '(low means the node runs internally-called services).'
              '</p>')
+    if w.bad_nodes:
+        tot = sum(w.bad_nodes.values())
+        names = ", ".join(sorted(w.bad_nodes)[:6])
+        h.append('<div class="verdict bad"><b>Capture defect — some pods could not be mapped to a node.</b> '
+                 f'{len(w.bad_nodes)} bogus node name(s) appeared in the CSV ({esc(names)}'
+                 f'{" …" if len(w.bad_nodes) > 6 else ""}), carrying up to {n0(tot)} requests between them. '
+                 'These are AGE strings, not nodes: the collector read the pod list positionally and a '
+                 '<span class="mono">RESTARTS</span> value like <span class="mono">1 (51m ago)</span> shifted '
+                 'the columns, so a restarted pod\'s requests were filed under its age. They have been excluded '
+                 'from every figure below, which means the requests of at least one pod are missing from its '
+                 'real node. Update perf-all.sh to read the pod list with '
+                 '<span class="mono">-o custom-columns</span> and re-capture for exact per-node figures.</div>')
     cap_mbps = nic_gbps * 1000.0
     hdr = ('<tr><th>Node</th><th class="num">RX peak</th><th class="num">RX avg</th>'
            '<th class="num">TX peak</th><th class="num">TX avg</th>'
            '<th class="num">RX pkt/s pk</th><th class="num">TX pkt/s pk</th>'
            '<th class="num">conntrack pk</th><th class="num">FROM GW</th>'
-           '<th class="num">share</th><th class="num">ALL RCVD</th></tr>')
+           '<th class="num">ALL RCVD</th><th class="num">share of work</th>'
+           '<th class="num">GW-facing</th></tr>')
     h.append('<div class="tbl-wrap"><table>' + hdr)
     G_fg = G_al = 0.0
     for gi, gname, gdesc in GROUPS:
         rws = sorted([(n, d) for n, d in w.nodes.items() if d["g"] == gi],
-                     key=lambda kv: (-kv[1]["fg"], -(kv[1]["rx_pk"] + kv[1]["tx_pk"])))
+                     key=lambda kv: (-kv[1]["al"], -(kv[1]["rx_pk"] + kv[1]["tx_pk"])))
         if not rws:
             continue
-        h.append(f'<tr class="grouphdr"><td colspan="11">{gname}<span>{gdesc}</span></td></tr>')
+        h.append(f'<tr class="grouphdr"><td colspan="12">{gname}<span>{gdesc}</span></td></tr>')
         srxp = w.g_rx_pk.get(gi, 0.0)
         stxp = w.g_tx_pk.get(gi, 0.0)
         sfg = sum(d["fg"] for _, d in rws)
@@ -580,18 +608,19 @@ def sec_nodes(w, nic_gbps):
         for n, d in rws:
             ctcls = "bad" if d["ct_pk"] > 100000 else ("warn" if d["ct_pk"] > 60000 else "")
             ct = f'<span class="pill {ctcls}">{n0(d["ct_pk"])}</span>' if ctcls else n0(d["ct_pk"])
-            sh = pct(d["fg"], w.node_fg) if w.node_fg else 0.0
-            bw = max(1, int(round(sh * 1.6))) if d["fg"] else 0
+            sh = pct(d["al"], w.node_al) if w.node_al else 0.0
+            bw = max(1, int(round(sh * 1.6))) if d["al"] else 0
             bcls = ""
             if d["g"] == 1 and w.w_mean:
-                if d["fg"] > 1.5 * w.w_mean:
+                if d["al"] > 1.5 * w.w_mean:
                     bcls = "bad"
-                elif d["fg"] > 1.2 * w.w_mean:
+                elif d["al"] > 1.2 * w.w_mean:
                     bcls = "warn"
-                elif d["fg"] < 0.6 * w.w_mean:
+                elif d["al"] < 0.6 * w.w_mean:
                     bcls = "mut"
             shcell = (f'<span class="bar {bcls}" style="width:{bw}px"></span> {sh:.1f}%'
-                      if d["fg"] else '<span class="muted">–</span>')
+                      if d["al"] else '<span class="muted">–</span>')
+            gwf = (f'{pct(d["fg"], d["al"]):.0f}%' if d["al"] else '<span class="muted">–</span>')
             nicp = pct(max(d["rx_pk"], d["tx_pk"]), cap_mbps)
             ncls = "bad" if nicp > 70 else ("warn" if nicp > 40 else "")
             rxcell = f'<span class="pill {ncls}">{f1(d["rx_pk"])}</span>' if ncls else f1(d["rx_pk"])
@@ -601,21 +630,25 @@ def sec_nodes(w, nic_gbps):
                      f'<td class="num">{n0(d["rp_pk"])}</td><td class="num">{n0(d["tp_pk"])}</td>'
                      f'<td class="num">{ct}</td>'
                      f'<td class="num">{n0(d["fg"]) if d["fg"] else "–"}</td>'
+                     f'<td class="num">{n0(d["al"]) if d["al"] else "–"}</td>'
                      f'<td class="num">{shcell}</td>'
-                     f'<td class="num">{n0(d["al"]) if d["al"] else "–"}</td></tr>')
+                     f'<td class="num">{gwf}</td></tr>')
         h.append(f'<tr class="sub"><td>{gname.replace("&amp;","&")} subtotal '
                  f'<span class="muted">({len(rws)} nodes)</span></td>'
                  f'<td class="num">{f1(srxp)}</td><td class="num"></td>'
                  f'<td class="num">{f1(stxp)}</td><td class="num"></td>'
                  f'<td class="num"></td><td class="num"></td><td class="num"></td>'
-                 f'<td class="num">{n0(sfg) if sfg else "–"}</td><td class="num"></td>'
-                 f'<td class="num">{n0(sal) if sal else "–"}</td></tr>')
+                 f'<td class="num">{n0(sfg) if sfg else "–"}</td>'
+                 f'<td class="num">{n0(sal) if sal else "–"}</td>'
+                 f'<td class="num"></td><td class="num"></td></tr>')
     h.append(f'<tr class="tot"><td>CLUSTER TOTAL <span class="muted">({len(w.nodes)} nodes)</span></td>'
              f'<td class="num">{f1(w.cl_rx_pk)}</td><td class="num"></td>'
              f'<td class="num">{f1(w.cl_tx_pk)}</td><td class="num"></td>'
              f'<td class="num"></td><td class="num"></td><td class="num"></td>'
-             f'<td class="num">{n0(G_fg)}</td><td class="num">100%</td>'
-             f'<td class="num">{n0(G_al)}</td></tr>')
+             f'<td class="num">{n0(G_fg)}</td>'
+             f'<td class="num">{n0(G_al)}</td>'
+             f'<td class="num">100%</td>'
+             f'<td class="num">{pct(G_fg, G_al):.0f}%</td></tr>')
     h.append('</table></div>')
     h.append('<p class="muted">Peak RX/TX in the group and cluster rows is the highest <i>simultaneous</i> '
              'total across those nodes, not the sum of each node\'s own peak — those happen at different '
@@ -640,13 +673,15 @@ def sec_balance(w):
     if not w.wnodes:
         return "".join(h) + '<p class="muted">No worker-node request data in this window.</p>'
     n = len(w.wnodes)
-    even = w.node_fg / n if n else 0
-    h.append('<p class="muted">The gateway distributes round-robin across pods, so if pods were spread evenly '
-             'across nodes each worker would take about the same share. A wide spread here is a <b>pod placement</b> '
-             'problem, not a load-balancer problem — it means more replicas of the busy services landed on some '
-             'nodes than others.</p>')
+    wtot = sum(d["al"] for _, d in w.wnodes)
+    even = wtot / n if n else 0
+    h.append('<p class="muted">Measured on <b>every request the pods on each node served</b>, not just the ones '
+             'arriving straight from the gateway — a node running only internally-called services would otherwise '
+             'read as idle while doing the most work in the cluster. If replicas were spread evenly, each worker '
+             'would take about the same share. A wide spread is a <b>pod placement</b> problem, not a '
+             'load-balancer problem.</p>')
     h.append('<div class="grid">')
-    h.append(kpi("Worker nodes serving", str(n), "", "nodes with gateway traffic"))
+    h.append(kpi("Worker nodes serving", str(n), "", "nodes that served requests"))
     h.append(kpi("Even share would be", n0(even), "", "requests per node"))
     h.append(kpi("Busiest node", n0(w.w_max), "warn" if w.w_mean and w.w_max > 1.5 * w.w_mean else "",
                  f"{w.w_max/w.w_mean:.2f}× the mean" if w.w_mean else ""))
@@ -656,13 +691,12 @@ def sec_balance(w):
     h.append(kpi("Spread (max ÷ min)", f"{w.w_skew:.2f}×", skcls,
                  "target under 1.6× with maxSkew=1"))
     h.append("</div>")
-    h.append('<div class="tbl-wrap"><table><tr><th>Node</th><th class="num">FROM GW</th>'
+    h.append('<div class="tbl-wrap"><table><tr><th>Node</th><th class="num">Requests served</th>'
              '<th class="num">Share</th><th class="num">vs mean</th>'
-             '<th class="num">ALL RCVD</th><th class="num">east-west ×</th>'
+             '<th class="num">from gateway</th><th class="num">GW-facing</th>'
              '<th>Reading</th></tr>')
     for nm, d in w.wnodes:
-        r = (d["fg"] / w.w_mean) if w.w_mean else 0
-        ew = (d["al"] / d["fg"]) if d["fg"] else 0
+        r = (d["al"] / w.w_mean) if w.w_mean else 0
         if r > 1.5:
             cls, txt = "bad", "hot — too many busy replicas here"
         elif r > 1.2:
@@ -671,12 +705,13 @@ def sec_balance(w):
             cls, txt = "mut", "under-used — room for a replica"
         else:
             cls, txt = "good", "within a fair band"
-        bw = max(2, int(round(pct(d["fg"], w.w_max) * 0.9)))
-        h.append(f'<tr><td class="mono">{nm}</td><td class="num">{n0(d["fg"])}</td>'
+        bw = max(2, int(round(pct(d["al"], w.w_max) * 0.9)))
+        h.append(f'<tr><td class="mono">{nm}</td><td class="num">{n0(d["al"])}</td>'
                  f'<td class="num"><span class="bar {"" if cls=="good" else cls}" '
-                 f'style="width:{bw}px"></span> {pct(d["fg"], w.node_fg):.1f}%</td>'
+                 f'style="width:{bw}px"></span> {pct(d["al"], wtot):.1f}%</td>'
                  f'<td class="num"><span class="pill {cls}">{r:.2f}×</span></td>'
-                 f'<td class="num">{n0(d["al"])}</td><td class="num">{ew:.2f}×</td>'
+                 f'<td class="num">{n0(d["fg"])}</td>'
+                 f'<td class="num">{pct(d["fg"], d["al"]):.0f}%</td>'
                  f'<td class="muted">{txt}</td></tr>')
     h.append("</table></div>")
     if w.w_skew > 1.6:
@@ -690,9 +725,10 @@ def sec_balance(w):
     else:
         h.append('<div class="verdict good"><b>Load is spread within a fair band across the workers.</b> '
                  'Pod placement is doing its job for this window.</div>')
-    h.append('<p class="muted"><b>east-west ×</b> is ALL RCVD ÷ FROM GW: how many internal service calls each '
-             f'external request turns into on that node. Cluster-wide it is {w.ew_ratio:.2f}× — every request '
-             'the gateway accepts causes roughly that many request-hops inside the mesh.</p>')
+    h.append('<p class="muted"><b>GW-facing</b> is how much of a node\'s work arrived straight from the ingress '
+             'gateway. A low figure is not a problem — it just means that node runs services other services call. '
+             f'Cluster-wide each external request turns into {w.ew_ratio:.2f} request-hops inside the mesh, which '
+             'is why the totals here are larger than the gateway ingress count.</p>')
     return "".join(h)
 
 
@@ -862,6 +898,10 @@ def verdict(wins):
         bits.append(f"Conntrack peaked at {n0(ct)} entries — check the kernel limit on that node.")
         if cls == "good":
             cls = "warn"
+    if any(x.bad_nodes for x in wins):
+        bits.append("Note: the capture could not map every pod to a node (see section 3) — per-node figures "
+                    "are short by those pods.")
+        cls = "bad"
     nicw = max((max(d["rx_pk"], d["tx_pk"]) for x in wins for d in x.nodes.values()), default=0.0)
     if nicw:
         bits.append(f"Busiest NIC peaked at {f1(nicw)} Mbps, so bandwidth is not the limiting factor.")

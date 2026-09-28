@@ -13,6 +13,9 @@
 # Use 10s or higher: section 2 execs into every perf pod each cycle.
 set -u
 
+CHECK=0
+[ "${1:-}" = "--check" ] && { CHECK=1; shift; }
+
 INT="${1:-10}"
 TAG="${2:-$(date +%H%M)}"
 GWNS="perf-istio-system"
@@ -22,14 +25,19 @@ GCSV="traffic_${TAG}.csv"
 NCSV="nodenet_${TAG}.csv"
 REQTMP="/tmp/.pa_req"
 
+# In --check mode nothing exits early: the point is to reach every step and show
+# which one fails, so a missing token does not hide a broken pod list.
+die() { [ "$CHECK" -eq 1 ] && return 0; echo "$1"; exit 1; }
+
+command -v oc >/dev/null 2>&1 || { echo "ERROR: oc not found in PATH"; exit 1; }
 TOKEN=$(oc whoami -t 2>/dev/null)
-[ -z "$TOKEN" ] && { echo "ERROR: no oc token (run: oc login)"; exit 1; }
+[ -z "$TOKEN" ] && die "ERROR: no oc token (run: oc login)"
 THANOS=$(oc -n openshift-monitoring get route thanos-querier -o jsonpath='{.spec.host}' 2>/dev/null)
-[ -z "$THANOS" ] && { echo "ERROR: thanos-querier route not found"; exit 1; }
+[ -z "$THANOS" ] && die "ERROR: thanos-querier route not found"
 
 GWPODS=$(oc -n "$GWNS" get pods -l "$GWSEL" --no-headers 2>/dev/null | awk '$3=="Running"{print $1}')
-[ -z "$GWPODS" ] && { echo "ERROR: no running gateway pods"; exit 1; }
-NGW=$(echo "$GWPODS" | wc -l | tr -d ' ')
+[ -z "$GWPODS" ] && die "ERROR: no running gateway pods in $GWNS"
+NGW=$(echo "$GWPODS" | grep -c . )
 
 # ---------- gateway reader ----------
 gwp() {
@@ -55,6 +63,14 @@ for r in d["data"]["result"]:
 '
 }
 
+# ---------- pod -> node map ----------
+# custom-columns, NOT -o wide. A RESTARTS cell renders as "1 (51m ago)", which splits
+# into three whitespace fields and shifts every later column: $8 then held the pod's
+# AGE ("51m") instead of its node, and that pod's requests were filed under a phantom
+# node whose name ticked over every minute. custom-columns has fixed field positions.
+CCOLS='NS:.metadata.namespace,POD:.metadata.name,NODE:.spec.nodeName,PHASE:.status.phase,CTRS:.spec.containers[*].name'
+podlist() { oc get pods -A --no-headers -o custom-columns="$CCOLS"; }
+
 # ---------- requests per NODE (istio sidecars, grouped by node) ----------
 REQTMP="/tmp/.nn_req"
 collect_requests() {
@@ -70,9 +86,23 @@ collect_requests() {
   # splits into three whitespace fields and shifts every later column: $8 then held
   # the pod's AGE ("51m") instead of its node, and that pod's requests were filed
   # under a phantom node whose name ticked over every minute.
-  oc get pods -A --no-headers 2>/dev/null \
-     -o custom-columns='NS:.metadata.namespace,POD:.metadata.name,NODE:.spec.nodeName,PHASE:.status.phase,CTRS:.spec.containers[*].name' \
-  | awk '$1 ~ /^perf-/ && $4=="Running" && $5 ~ /istio-proxy/ {print $1"|"$2"|"$3}' > "$REQTMP/map"
+  podlist > "$REQTMP/raw" 2>"$REQTMP/err"
+  awk '$1 ~ /^perf-/ && $4=="Running" && $5 ~ /istio-proxy/ {print $1"|"$2"|"$3}' \
+      "$REQTMP/raw" > "$REQTMP/map"
+  if [ ! -s "$REQTMP/map" ]; then
+    # stdout is redirected into a temp file here, so every word of this goes to stderr
+    {
+      echo
+      echo "ERROR: could not map any perf pod to a node."
+      _rows=$(grep -c . "$REQTMP/raw" 2>/dev/null); echo "  rows returned by oc : ${_rows:-0}"
+      [ -s "$REQTMP/err" ] && { echo "  oc said:"; sed 's/^/    /' "$REQTMP/err"; }
+      [ -s "$REQTMP/raw" ] && { echo "  first perf row seen:"
+        grep '^perf-' "$REQTMP/raw" | head -1 | sed 's/^/    /'; }
+      echo "  expected columns: 1=namespace 2=pod 3=node 4=Running 5=...,istio-proxy"
+      echo "  run  ./perf-all.sh --check  for a step-by-step diagnosis"
+    } >&2
+    exit 1
+  fi
   while IFS='|' read -r ns pod node; do
     [ -z "$node" ] && continue
     node=${node%%.*}
@@ -95,11 +125,94 @@ collect_requests() {
   done | awk '{g[$1]+=$2; a[$1]+=$3} END{for(n in g) print n, g[n], a[n]}'
 }
 
+# ---------- preflight ----------
+# ./perf-all.sh --check  runs every dependency once and shows the real error for
+# whichever one fails, instead of the script dying with a one-line message.
+selfcheck() {
+  fail=0
+  echo "PERF-ALL PREFLIGHT"
+  echo "--------------------------------------------------------------------------"
+  printf "1. oc client            : "
+  ocv=$(oc version --client 2>&1 | head -1)
+  echo "${ocv:-<no output>}"
+
+  printf "2. logged in            : "
+  if [ -n "$TOKEN" ]; then echo "yes  ($(oc whoami 2>/dev/null))"; else echo "NO"; fail=1; fi
+
+  printf "3. thanos route         : "
+  if [ -n "$THANOS" ]; then echo "$THANOS"; else echo "NOT FOUND"; fail=1; fi
+
+  printf "4. gateway pods         : "
+  if [ -n "$GWPODS" ]; then echo "$NGW found"; else echo "NONE"; fail=1; fi
+
+  printf "5. gateway counter      : "
+  gp1=$(echo "$GWPODS" | head -1)
+  c=$([ -n "$gp1" ] && gwp "$gp1" 2>&1)
+  case "$c" in
+    ''|0) echo "UNREADABLE"
+          echo "     raw output of the exec:"
+          [ -n "$gp1" ] && oc -n "$GWNS" exec "$gp1" -c istio-proxy -- \
+             pilot-agent request GET "$MPATH" 2>&1 | head -3 | sed 's/^/       /'
+          fail=1 ;;
+    *) echo "$c" ;;
+  esac
+
+  printf "6. thanos query         : "
+  n=$(q 'up{job="node-exporter"}' | wc -l)
+  if [ "$n" -gt 0 ]; then echo "$n nodes reporting"; else
+    echo "NO DATA"
+    echo "     raw response:"
+    curl -sk --max-time 15 -H "Authorization: Bearer $TOKEN" \
+      --data-urlencode 'query=up{job="node-exporter"}' \
+      "https://$THANOS/api/v1/query" 2>&1 | head -c 300 | sed 's/^/       /'
+    echo; fail=1
+  fi
+
+  printf "7. pod list (columns)   : "
+  raw=$(podlist 2>&1)
+  rows=$(printf '%s\n' "$raw" | grep -c . )
+  if [ "$rows" -lt 2 ]; then
+    echo "FAILED"
+    echo "     oc said:"; printf '%s\n' "$raw" | head -4 | sed 's/^/       /'
+    fail=1
+  else
+    echo "$rows rows"
+    printf "8. perf pods with mesh  : "
+    m=$(printf '%s\n' "$raw" \
+        | awk '$1 ~ /^perf-/ && $4=="Running" && $5 ~ /istio-proxy/ {print $1"|"$2"|"$3}')
+    mc=$(printf '%s\n' "$m" | grep -c . )
+    if [ "$mc" -eq 0 ]; then
+      echo "0  <-- THIS IS THE PROBLEM"
+      echo "     a perf row looks like:"
+      printf '%s\n' "$raw" | grep '^perf-' | head -1 | sed 's/^/       /'
+      echo "     expected: col1=namespace col2=pod col3=node col4=Running col5=...,istio-proxy"
+      fail=1
+    else
+      echo "$mc pods"
+      echo "     sample: $(printf '%s\n' "$m" | head -1)"
+      printf "9. sidecar metrics      : "
+      p=$(printf '%s\n' "$m" | head -1)
+      pns=$(echo "$p" | cut -d'|' -f1); ppod=$(echo "$p" | cut -d'|' -f2)
+      v=$(oc -n "$pns" exec "$ppod" -c istio-proxy -- \
+            pilot-agent request GET /stats/prometheus 2>&1 \
+          | awk '/^istio_requests_total\{/ && /reporter="destination"/ {s+=$NF} END{print s+0}')
+      if [ "${v:-0}" -gt 0 ] 2>/dev/null; then echo "$v requests on that pod"
+      else echo "0 or unreadable (fine if no load is running)"; fi
+    fi
+  fi
+  echo "--------------------------------------------------------------------------"
+  [ "$fail" -eq 0 ] && echo "ALL CHECKS PASSED — safe to run." || echo "FIX THE FAILING STEP ABOVE."
+  exit "$fail"
+}
+[ "$CHECK" -eq 1 ] && selfcheck
+
 # ---------- sanity checks ----------
 CHK=$(gwp "$(echo "$GWPODS" | head -1)")
-[ -z "$CHK" ] || [ "$CHK" = "0" ] && { echo "ERROR: cannot read gateway counter"; exit 1; }
+[ -z "$CHK" ] || [ "$CHK" = "0" ] && {
+  echo "ERROR: cannot read gateway counter — run: ./perf-all.sh --check"; exit 1; }
 T=$(q 'up{job="node-exporter"}' | wc -l)
-[ "$T" -eq 0 ] && { echo "ERROR: thanos returned no node-exporter data"; exit 1; }
+[ "$T" -eq 0 ] && {
+  echo "ERROR: thanos returned no node-exporter data — run: ./perf-all.sh --check"; exit 1; }
 echo "gateway pods: $NGW    nodes reporting: $T"
 
 # ---------- ONE shared baseline ----------

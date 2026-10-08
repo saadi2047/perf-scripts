@@ -4,13 +4,19 @@
 # SBI ePay 2.0 PERF · Saadi M Muzzammil
 # ----------------------------------------------------------------------------
 #   ./perf-kafka.sh --check                 preflight: discover and test everything
-#   ./perf-kafka.sh                         monitor, 15s cycle, Ctrl-C to stop
-#   ./perf-kafka.sh 15 k1 -o DIR -d 3600    15s cycle, tag k1, into DIR, 1h then stop
+#   ./perf-kafka.sh                         asks interval + duration, then runs
+#   ./perf-kafka.sh -i 15 -d 3600           no prompts: 15s cycle, 1 hour
+#
+# Each run creates its own folder  ./kafka-test-<YYYYmmdd_HHMMSS>/  holding the
+# CSVs and the HTML report, which is built automatically when the window closes
+# (on the duration limit or on Ctrl-C).
 #
 # Flags:  -o DIR   output directory (default .)
 #         -d SECS  stop by itself after SECS
 #         -n NS    namespace (default perf-kafka)
+#         -i SECS  sampling interval, 10 .. 300 (prompted when not given)
 #         -D N     run the expensive in-pod CLI captures every Nth cycle (default 4)
+#         --no-report  write the CSVs but do not build the HTML
 #         -T HOST  thanos-querier host, if your user cannot list the route
 #         --no-cli skip in-pod CLI entirely (Thanos metrics only)
 #
@@ -38,24 +44,94 @@ set -u
 CHECK=0
 [ "${1:-}" = "--check" ] && { CHECK=1; shift; }
 
-INT=15; TAG=""
-case "${1:-}" in ''|-*) ;; *) INT="$1"; shift;; esac
+INT=15; TAG=""; GOT_INT=0; GOT_DUR=0; GOT_OUT=0
+case "${1:-}" in ''|-*) ;; *) INT="$1"; GOT_INT=1; shift;; esac
 case "${1:-}" in ''|-*) ;; *) TAG="$1"; shift;; esac
-OUTDIR="."; DURATION=0; NS="perf-kafka"; DEEP_EVERY=4; USE_CLI=1; THANOS=""
+OUTDIR=""; DURATION=0; NS="perf-kafka"; DEEP_EVERY=4; USE_CLI=1; THANOS=""; NOREPORT=0
+MAXDUR=86400
 while [ $# -gt 0 ]; do
   case "$1" in
-    -o) OUTDIR="${2:-.}"; shift 2;;
-    -d) DURATION="${2:-0}"; shift 2;;
+    -o) OUTDIR="${2:-.}"; GOT_OUT=1; shift 2;;
+    -d) DURATION="${2:-0}"; GOT_DUR=1; shift 2;;
+    -i) INT="${2:-15}"; GOT_INT=1; shift 2;;
     -n) NS="${2:-perf-kafka}"; shift 2;;
     -D) DEEP_EVERY="${2:-4}"; shift 2;;
     -T) THANOS="${2:-}"; shift 2;;
     --no-cli) USE_CLI=0; shift;;
+    --no-report) NOREPORT=1; shift;;
     *)  shift;;
   esac
 done
-[ -z "$TAG" ] && TAG=$(date +%H%M)
-mkdir -p "$OUTDIR" 2>/dev/null
 
+fmt_dur() { awk -v d="$1" 'BEGIN{ if (d<3600) printf "%.0f min", d/60; else printf "%.1f hours", d/3600 }'; }
+ask_yn() {
+  while :; do
+    printf "      %s [Y/n]: " "$1" >&2
+    _y=""; read -r _y || _y=""
+    case "$_y" in
+      ''|y|Y|yes|Yes|YES) return 0;;
+      n|N|no|No|NO)       return 1;;
+      *) printf "      please answer Y or N.\n" >&2;;
+    esac
+  done
+}
+ask_int() {
+  _lbl="$1"; _min="$2"; _max="$3"; _def="$4"
+  while :; do
+    printf "   %s [%s]: " "$_lbl" "$_def" >&2
+    _a=""; read -r _a || _a=""
+    [ -z "$_a" ] && _a="$_def"
+    if echo "$_a" | grep -qE '^[0-9]+$' && [ "$_a" -ge "$_min" ] && [ "$_a" -le "$_max" ]; then
+      echo "$_a"; return 0
+    fi
+    printf "      not valid — enter a whole number between %s and %s.\n" "$_min" "$_max" >&2
+  done
+}
+chk() {
+  if ! echo "$2" | grep -qE '^[0-9]+$' || [ "$2" -lt "$3" ] || [ "$2" -gt "$4" ]; then
+    echo "ERROR: $1 must be a whole number between $3 and $4 (got '$2')"; exit 1
+  fi
+}
+[ "$GOT_INT" -eq 1 ] && chk -i "$INT" 10 300
+[ "$GOT_DUR" -eq 1 ] && chk -d "$DURATION" 60 "$MAXDUR"
+
+# Ask for whatever was not supplied, when there is a terminal to ask on. A flag
+# skips its prompt, so a scripted or scheduled run never blocks.
+if [ "$CHECK" -eq 0 ] && [ -t 0 ]; then
+  echo
+  echo "   --------------------------------------------------------------"
+  echo "   KAFKA CAPTURE SETTINGS"
+  echo "   --------------------------------------------------------------"
+  [ "$GOT_INT" -eq 0 ] && INT=$(ask_int \
+    "1. Sampling interval, seconds (10-300, recommended 15)" 10 300 15)
+  if [ "$GOT_DUR" -eq 0 ]; then
+    while :; do
+      DURATION=$(ask_int \
+        "2. How long to run, seconds (60-86400 = up to 24h; 300=5m, 1800=30m, 3600=1h)" \
+        60 "$MAXDUR" 3600)
+      [ "$DURATION" -le 3600 ] && break
+      printf "      that is %s — longer than an hour.\n" "$(fmt_dur "$DURATION")" >&2
+      ask_yn "Run the capture for that long?" && break
+    done
+  fi
+  echo "   --------------------------------------------------------------"
+elif [ "$CHECK" -eq 0 ] && { [ "$GOT_INT" -eq 0 ] || [ "$GOT_DUR" -eq 0 ]; }; then
+  [ "$DURATION" -eq 0 ] && DURATION=3600
+  echo "[*] no terminal to prompt on — using defaults (-i $INT, -d $DURATION)"
+fi
+[ "$DURATION" -eq 0 ] && DURATION=3600
+
+[ -z "$TAG" ] && TAG=$(date +%H%M)
+# Every run gets its own timestamped folder, so repeated runs never overwrite
+# each other and the CSVs always sit next to the report built from them.
+RUNDIR=""
+if [ "$GOT_OUT" -eq 0 ]; then
+  RUNDIR="$(pwd)/kafka-test-$(date +%Y%m%d_%H%M%S)"
+  OUTDIR="$RUNDIR"
+fi
+mkdir -p "$OUTDIR" 2>/dev/null || { echo "ERROR: cannot create $OUTDIR"; exit 1; }
+
+SCRIPT_DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd || echo .)
 TMP="/tmp/.pk_$$"; mkdir -p "$TMP"
 MNAMES="$TMP/metric_names"
 QUIET=0; [ -t 1 ] || QUIET=1
@@ -493,11 +569,38 @@ finish() {
   echo "=================================================================================="
   printf "   CSVs in %s  (tag %s)\n" "$OUTDIR" "$TAG"
   rm -rf "$TMP"
+
+  # Build the HTML straight away — the report is the deliverable, and a capture
+  # that needs a second command to become readable gets forgotten.
+  if [ "$NOREPORT" -eq 0 ]; then
+    _rep="$SCRIPT_DIR/kafka_report.py"
+    if [ -f "$_rep" ]; then
+      _out="$OUTDIR/KAFKA_Report_$(date +%Y%m%d_%H%M%S).html"
+      echo
+      echo "[*] building the HTML report..."
+      if python3 "$_rep" --dir "$OUTDIR" --tag "$TAG" -o "$_out"; then
+        echo "[OK] REPORT: $_out"
+      else
+        echo "[!] report could not be built — the CSVs in $OUTDIR are still complete."
+        echo "    retry with: python3 $_rep --dir $OUTDIR --tag $TAG -o report.html"
+      fi
+    else
+      echo "[!] kafka_report.py not found beside perf-kafka.sh — CSVs written, no HTML."
+      echo "    build it with: python3 kafka_report.py --dir $OUTDIR --tag $TAG -o report.html"
+    fi
+  fi
   exit 0
 }
 trap finish INT
 
-echo "perf-kafka monitor — ns=$NS brokers=$NBROKER cycle=${INT}s tag=$TAG"
+echo
+echo "[*] plan for this window:"
+printf "      duration   : %ss (%s)\n" "$DURATION" "$(fmt_dur "$DURATION")"
+printf "      interval   : every %ss   (deep CLI capture every %s cycles)\n" "$INT" "$DEEP_EVERY"
+printf "      namespace  : %s   brokers: %s\n" "$NS" "$NBROKER"
+printf "      run folder : %s\n" "$OUTDIR"
+[ "$NOREPORT" -eq 0 ] && printf "      the HTML report is built automatically when the window closes\n"
+echo
 [ "$NMET" -lt 5 ] && echo "  [!] few/no JMX metrics in Thanos — run --check; collection will be partial"
 [ "$CLI_OK" -eq 0 ] && [ "$USE_CLI" -eq 1 ] && echo "  [!] in-pod Kafka CLI unusable — consumer lag/health from CLI will be empty"
 

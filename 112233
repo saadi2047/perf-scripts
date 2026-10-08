@@ -1,74 +1,13 @@
+python3 kafka_report.py --tag 1524 -o KAFKA_Report_1524.html
 
-==================================================================================
-   PERF-KAFKA — 2026-10-08 15:36:51 IST    elapsed 718s    cycle 15s    ns=perf-kafka    tag=1524
-   window start 2026-10-08 15:24:53 IST    sample 35
-==================================================================================
-  [1] CLUSTER HEALTH
-  ----------------------------------------------------------------------------------
-      active controllers         not published   (metric absent)
-      offline partitions         not published   (metric absent)
-      under-replicated           not published   (metric absent)
-      unclean elections/s        not published   (metric absent)
-      partitions / leaders       not published   (metric absent)
-      throughput                 not published   (no JMX exporter — see --check)
+python3 kafka_report.py --tag 1524 -o KAFKA_Report_1524.html
 
-  [2] BROKERS   (idle% is the saturation signal: <30% = request handlers starved)
-  ----------------------------------------------------------------------------------
-  BROKER                        MB/s in MB/s out    msg/s hnd idle net idle  reqQ   purg  URP  part  lead
-  -------------------------------------------------------------------------------------------------------
-  perf-kafka-cluster-broker-0         -        -        -        -        -     -      -    -     -     -
-  perf-kafka-cluster-broker-1         -        -        -        -        -     -      -    -     -     -
-  perf-kafka-cluster-broker-2         -        -        -        -        -     -      -    -     -     -
+# A. is the exporter actually publishing on the broker?
+oc -n perf-kafka exec perf-kafka-cluster-broker-0 -- \
+   curl -s localhost:9404/metrics 2>/dev/null | grep -c '^kafka_'
 
-  [5] PODS   (placement, resources, JVM)
-  ----------------------------------------------------------------------------------
-  POD                           ROLE        NODE              RDY  RST     CPU   MEM Mi  heap Mi   GC/s
-  perf-kafka-cluster-broker-0   broker      kafbroker1        1/1    0    360m     8591        0   0.00
-  perf-kafka-cluster-broker-1   broker      kafbroker3        1/1    0    314m     8320        0   0.00
-  perf-kafka-cluster-broker-2   broker      kafbroker2        1/1    0    267m    12574        0   0.00
-  perf-kafka-cluster-controller controller  kafbroker3        1/1    0    145m     3227        0   0.00
-  perf-kafka-cluster-controller controller  kafbroker1        1/1    0     28m     3243        0   0.00
-  perf-kafka-cluster-controller controller  kafbroker2        1/1    0     17m     4229        0   0.00
-  perf-kafka-cluster-cruise-con cruise-ctl  worker4           1/1    3     17m     1616        0   0.00
-  perf-kafka-cluster-entity-ope entity-op   worker5           2/2    0     10m      949        0   0.00
-==================================================================================
-   Ctrl-C for the window summary   |   CSVs: ./kafka_*_1524.csv
-^C
-==================================================================================
-   PERF-KAFKA WINDOW SUMMARY   (tag: 1524, namespace: perf-kafka)
-==================================================================================
-   START / END (IST) : 2026-10-08 15:24:53  ->  2026-10-08 15:37:02
-   DURATION          : 729s (12.2 min) over 35 samples
-   BROKERS           : 3
-   PEAK THROUGHPUT   : in 0 MB/s   out 0 MB/s   0 msg/s
-   WORST HANDLER IDLE: 100%   (under 30% = brokers saturated)
-   MAX UNDER-REPL    : 0   (must return to 0)
-   MAX CONSUMER LAG  : 0
-==================================================================================
-   CSVs in .  (tag 1524)
-[osuser@bastion perf-kafka]$
-[osuser@bastion perf-kafka]$ oc -n perf-kafka get kafka perf-kafka-cluster -o jsonpath='{.spec.kafka.metricsConfig}{"\n"}'
-{"type":"jmxPrometheusExporter","valueFrom":{"configMapKeyRef":{"key":"kafka-metrics-config.yml","name":"kafka-metrics"}}}
-[osuser@bastion perf-kafka]$ oc -n perf-kafka get podmonitor,servicemonitor
-Error from server (Forbidden): podmonitors.monitoring.coreos.com is forbidden: User "V1021008" cannot list resource "podmonitors" in API group "monitoring.coreos.com" in the namespace "perf-kafka": RBAC: clusterrole.rbac.authorization.k8s.io "tempostack-traces-reader" not found
-Error from server (Forbidden): servicemonitors.monitoring.coreos.com is forbidden: User "V1021008" cannot list resource "servicemonitors" in API group "monitoring.coreos.com" in the namespace "perf-kafka": RBAC: clusterrole.rbac.authorization.k8s.io "tempostack-traces-reader" not found
-[osuser@bastion perf-kafka]$ oc -n openshift-monitoring get cm cluster-monitoring-config -o yaml | grep -i enableUserWorkload
-    enableUserWorkload: true
-[osuser@bastion perf-kafka]$
-[osuser@bastion perf-kafka]$ ll
-total 172
--rw-r----- 1 osuser osuser  8492 Oct  8 15:36 kafka_broker_1524.csv
--rw-r----- 1 osuser osuser  1314 Oct  8 15:36 kafka_cluster_1524.csv
--rw-r----- 1 osuser osuser    54 Oct  8 15:24 kafka_disk_1524.csv
--rw-r----- 1 osuser osuser   977 Oct  8 15:36 kafka_health_1524.csv
--rw-r----- 1 osuser osuser    58 Oct  8 15:24 kafka_jvm_1524.csv
--rw-r----- 1 osuser osuser  8915 Oct  8 15:36 kafka_lag_1524.csv
--rw-r----- 1 osuser osuser    62 Oct  8 15:24 kafka_latency_1524.csv
--rw-r----- 1 osuser osuser 28387 Oct  8 15:36 kafka_pod_1524.csv
--rw-r----- 1 osuser osuser 45647 Oct  8 15:18 kafka_report.py
--rw-r----- 1 osuser osuser 13170 Oct  8 15:19 kafka_sample.py
--rw-r----- 1 osuser osuser    66 Oct  8 15:24 kafka_topic_1524.csv
--rwxr-x--- 1 osuser osuser 29174 Oct  8 15:23 perf-kafka.sh
-[osuser@bastion perf-kafka]$
-
-
+# B. can Thanos answer for it directly?
+TOKEN=$(oc whoami -t); THANOS=$(oc -n openshift-monitoring get route thanos-querier -o jsonpath='{.spec.host}')
+curl -sk -H "Authorization: Bearer $TOKEN" \
+  --data-urlencode 'query=kafka_server_replicamanager_underreplicatedpartitions{namespace="perf-kafka"}' \
+  "https://$THANOS/api/v1/query" | head -c 300

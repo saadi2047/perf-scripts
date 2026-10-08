@@ -142,6 +142,49 @@ for n in (d.get("data") or []): print(n)'
   done | sort -u > "$MNAMES"
 }
 
+# The label-values API can come back empty even when the series exist: on OpenShift
+# user-workload metrics it depends on how the token is scoped. So if the catalogue
+# looks empty, ask for a shortlist of well-known names DIRECTLY and keep whichever
+# actually return data. Discovery by query, not only by catalogue.
+KNOWN="kafka_server_brokertopicmetrics_bytesin_total
+kafka_server_brokertopicmetrics_bytesout_total
+kafka_server_brokertopicmetrics_messagesin_total
+kafka_server_kafkarequesthandlerpool_requesthandleravgidlepercent
+kafka_network_socketserver_networkprocessoravgidlepercent
+kafka_server_replicamanager_underreplicatedpartitions
+kafka_server_replicamanager_partitioncount
+kafka_server_replicamanager_leadercount
+kafka_server_replicamanager_isrshrinks_total
+kafka_server_replicamanager_isrexpands_total
+kafka_controller_kafkacontroller_offlinepartitionscount
+kafka_controller_kafkacontroller_activecontrollercount
+kafka_controller_controllerstats_uncleanleaderelections_total
+kafka_network_requestmetrics_requestqueuesize
+kafka_network_requestmetrics_responsequeuesize
+kafka_network_requestmetrics_totaltimems
+kafka_network_requestmetrics_requestqueuetimems
+kafka_network_requestmetrics_localtimems
+kafka_network_requestmetrics_requestspersec
+kafka_server_delayedoperationpurgatory_purgatorysize
+kafka_server_fetcherlagmetrics_consumerlag
+kafka_consumergroup_lag
+jvm_memory_bytes_used
+jvm_gc_collection_seconds_count
+jvm_gc_collection_seconds_sum
+kubelet_volume_stats_used_bytes
+kubelet_volume_stats_capacity_bytes"
+
+probe_known() {
+  for c in $KNOWN; do
+    grep -qx "$c" "$MNAMES" 2>/dev/null && continue
+    case "$c" in
+      kubelet_*) _n=$(qj "$c{namespace=\"$NS\"}" "" | grep -c . ) ;;
+      *)         _n=$(qj "$c{namespace=\"$NS\"}" "" | grep -c . ) ;;
+    esac
+    [ "${_n:-0}" -gt 0 ] && echo "$c"
+  done
+}
+
 # find_metric PATTERN  -> the best matching metric name, or "" if none.
 # Prefers a counter (_total) over a gauge snapshot of the same concept.
 find_metric() {
@@ -220,6 +263,14 @@ probe_cli() {
 # ---------------------------------------------------------------- resolve ---
 load_metric_names
 NMET=$(grep -c . "$MNAMES" 2>/dev/null); NMET=${NMET:-0}
+PROBED=0
+if [ "$NMET" -lt 8 ]; then
+  probe_known >> "$MNAMES"
+  sort -u -o "$MNAMES" "$MNAMES"
+  NEW=$(grep -c . "$MNAMES" 2>/dev/null); NEW=${NEW:-0}
+  PROBED=$(( NEW - NMET ))
+  NMET=$NEW
+fi
 
 M_BYTESIN=$(find_metric 'brokertopicmetrics.*bytesin|bytes_in_per_sec|bytesinpersec')
 M_BYTESOUT=$(find_metric 'brokertopicmetrics.*bytesout|bytes_out_per_sec|bytesoutpersec')
@@ -299,7 +350,9 @@ selfcheck() {
     $1 ~ "^("b")$" { printf "      %-34s %-12s %s\n", $1, $2, $3 }'
 
   echo
-  printf "11. metric names in Thanos matching kafka/jvm : %s\n" "$NMET"
+  printf "11. metric names in Thanos matching kafka/jvm : %s" "$NMET"
+  [ "$PROBED" -gt 0 ] && printf "  (%s found by direct probe — the label catalogue was empty)" "$PROBED"
+  echo
   if [ "$NMET" -lt 5 ]; then
     echo "      ^ almost nothing found. Your Kafka CR probably has no metricsConfig,"
     echo "        so the JMX Prometheus exporter is not running. Without it this"
@@ -403,7 +456,9 @@ T0=$(date +%s); T0_MS=$(now_ms)
 DEADLINE=0
 [ "$DURATION" -gt 0 ] 2>/dev/null && DEADLINE=$(( T0 + DURATION ))
 START_IST=$(TZ=Asia/Kolkata date '+%Y-%m-%d %H:%M:%S')
-PEAK_IN=0; PEAK_OUT=0; PEAK_MSG=0; MIN_IDLE=100; MAX_URP=0; MAX_LAG=0; SAMPLES=0
+# empty, not zero: "0 MB/s" and "100% idle" would both be lies when the metric
+# was never published at all
+PEAK_IN=""; PEAK_OUT=""; PEAK_MSG=""; MIN_IDLE=""; MAX_URP=""; MAX_LAG=""; SAMPLES=0
 
 finish() {
   END_IST=$(TZ=Asia/Kolkata date '+%Y-%m-%d %H:%M:%S')
@@ -416,10 +471,25 @@ finish() {
   printf "   DURATION          : %ss (%s min) over %s samples\n" \
      "$EL" "$(awk -v e=$EL 'BEGIN{printf "%.1f", e/60}')" "$SAMPLES"
   printf "   BROKERS           : %s\n" "$NBROKER"
-  printf "   PEAK THROUGHPUT   : in %s MB/s   out %s MB/s   %s msg/s\n" "$PEAK_IN" "$PEAK_OUT" "$PEAK_MSG"
-  printf "   WORST HANDLER IDLE: %s%%   (under 30%% = brokers saturated)\n" "$MIN_IDLE"
-  printf "   MAX UNDER-REPL    : %s   (must return to 0)\n" "$MAX_URP"
-  printf "   MAX CONSUMER LAG  : %s\n" "$MAX_LAG"
+  if [ -n "$PEAK_IN" ]; then
+    printf "   PEAK THROUGHPUT   : in %s MB/s   out %s MB/s   %s msg/s\n" "$PEAK_IN" "$PEAK_OUT" "$PEAK_MSG"
+  else
+    printf "   PEAK THROUGHPUT   : not measured — no JMX metrics reached Thanos (run --check)\n"
+  fi
+  if [ -n "$MIN_IDLE" ]; then
+    printf "   WORST HANDLER IDLE: %s%%   (under 30%% = brokers saturated)\n" "$MIN_IDLE"
+  else
+    printf "   WORST HANDLER IDLE: not measured\n"
+  fi
+  if [ -n "$MAX_URP" ]; then
+    printf "   MAX UNDER-REPL    : %s   (must return to 0)\n" "$MAX_URP"
+  else
+    printf "   MAX UNDER-REPL    : not measured via JMX"
+    if [ -s "$C_HLT" ]; then
+      printf "  (CLI check: %s)\n" "$(awk -F, '$3=="under_replicated_partitions"{m=($4+0>m)?$4+0:m} END{print m+0" peak"}' "$C_HLT")"
+    else printf "\n"; fi
+  fi
+  printf "   MAX CONSUMER LAG  : %s\n" "${MAX_LAG:-not measured}"
   echo "=================================================================================="
   printf "   CSVs in %s  (tag %s)\n" "$OUTDIR" "$TAG"
   rm -rf "$TMP"

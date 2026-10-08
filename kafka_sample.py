@@ -334,6 +334,8 @@ if pvcu:
 
 print("\n".join(O))
 # values the shell keeps for the closing summary
-print(f"##STAT CUR_IN={tot_in:.2f} CUR_OUT={tot_out:.2f} CUR_MSG={tot_msg:.0f} "
+print(f"##STAT CUR_IN={f'{tot_in:.2f}' if have_tput else ''} "
+      f"CUR_OUT={f'{tot_out:.2f}' if have_tput else ''} "
+      f"CUR_MSG={f'{tot_msg:.0f}' if have_tput else ''} "
       f"CUR_IDLE={'' if min_idle is None else f'{min_idle:.1f}'} "
       f"CUR_URP={'' if tot_urp is None else f'{tot_urp:.0f}'}")

@@ -1,16 +1,38 @@
-[osuser@bastion Muzzammil]$ mkdir perf-kafka
-[osuser@bastion Muzzammil]$ cd perf-kafka/
-[osuser@bastion perf-kafka]$ ll
-total 0
-[osuser@bastion perf-kafka]$ vi kafka_report.py
-[osuser@bastion perf-kafka]$ vi perf-kafka.sh
-[osuser@bastion perf-kafka]$ vi kafka_sample.py
-[osuser@bastion perf-kafka]$ ll
-total 92
--rw-r----- 1 osuser osuser 45647 Oct  8 15:18 kafka_report.py
--rw-r----- 1 osuser osuser 13170 Oct  8 15:19 kafka_sample.py
--rw-r----- 1 osuser osuser 27808 Oct  8 15:18 perf-kafka.sh
-[osuser@bastion perf-kafka]$ chmod +x perf-kafka.sh
-[osuser@bastion perf-kafka]$ ./perf-kafka.sh
-ERROR: thanos-querier route not found
-[osuser@bastion perf-kafka
+   Ctrl-C for the window summary   |   CSVs: ./kafka_*_1524.csv
+==================================================================================
+   PERF-KAFKA — 2026-10-08 15:26:00 IST    elapsed 67s    cycle 15s    ns=perf-kafka    tag=1524
+   window start 2026-10-08 15:24:53 IST    sample 3
+==================================================================================
+  [1] CLUSTER HEALTH
+  ----------------------------------------------------------------------------------
+      active controllers         not published   (metric absent)
+      offline partitions         not published   (metric absent)
+      under-replicated           not published   (metric absent)
+      unclean elections/s        not published   (metric absent)
+      partitions / leaders       not published   (metric absent)
+      throughput                 not published   (no JMX exporter — see --check)
+
+  [2] BROKERS   (idle% is the saturation signal: <30% = request handlers starved)
+  ----------------------------------------------------------------------------------
+  BROKER                        MB/s in MB/s out    msg/s hnd idle net idle  reqQ   purg  URP  part  lead
+  -------------------------------------------------------------------------------------------------------
+  perf-kafka-cluster-broker-0         -        -        -        -        -     -      -    -     -     -
+  perf-kafka-cluster-broker-1         -        -        -        -        -     -      -    -     -     -
+  perf-kafka-cluster-broker-2         -        -        -        -        -     -      -    -     -     -
+
+  [5] PODS   (placement, resources, JVM)
+  ----------------------------------------------------------------------------------
+  POD                           ROLE        NODE              RDY  RST     CPU   MEM Mi  heap Mi   GC/s
+  perf-kafka-cluster-broker-0   broker      kafbroker1        1/1    0    328m     8589        0   0.00
+  perf-kafka-cluster-broker-1   broker      kafbroker3        1/1    0    296m     8309        0   0.00
+  perf-kafka-cluster-broker-2   broker      kafbroker2        1/1    0    483m    12570        0   0.00
+  perf-kafka-cluster-controller controller  kafbroker3        1/1    0     40m     3227        0   0.00
+  perf-kafka-cluster-controller controller  kafbroker1        1/1    0     56m     3243        0   0.00
+  perf-kafka-cluster-controller controller  kafbroker2        1/1    0     25m     4229        0   0.00
+  perf-kafka-cluster-cruise-con cruise-ctl  worker4           1/1    3     17m     1617        0   0.00
+  perf-kafka-cluster-entity-ope entity-op   worker5           2/2    0      9m      949        0   0.00
+==================================================================================
+   Ctrl-C for the window summary   |   CSVs: ./kafka_*_1524.csv
+
+
+

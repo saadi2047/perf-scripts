@@ -48,6 +48,7 @@ INT=15; TAG=""; GOT_INT=0; GOT_DUR=0; GOT_OUT=0
 case "${1:-}" in ''|-*) ;; *) INT="$1"; GOT_INT=1; shift;; esac
 case "${1:-}" in ''|-*) ;; *) TAG="$1"; shift;; esac
 OUTDIR=""; DURATION=0; NS="perf-kafka"; DEEP_EVERY=4; USE_CLI=1; THANOS=""; NOREPORT=0
+DUMP=0; DUMPPAT=""
 MAXDUR=86400
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -57,6 +58,7 @@ while [ $# -gt 0 ]; do
     -n) NS="${2:-perf-kafka}"; shift 2;;
     -D) DEEP_EVERY="${2:-4}"; shift 2;;
     -T) THANOS="${2:-}"; shift 2;;
+    --metrics) DUMP=1; DUMPPAT="${2:-}"; case "$DUMPPAT" in -*|'') DUMPPAT=""; shift;; *) shift 2;; esac;;
     --no-cli) USE_CLI=0; shift;;
     --no-report) NOREPORT=1; shift;;
     *)  shift;;
@@ -97,7 +99,7 @@ chk() {
 
 # Ask for whatever was not supplied, when there is a terminal to ask on. A flag
 # skips its prompt, so a scripted or scheduled run never blocks.
-if [ "$CHECK" -eq 0 ] && [ -t 0 ]; then
+if [ "$CHECK" -eq 0 ] && [ "$DUMP" -eq 0 ] && [ -t 0 ]; then
   echo
   echo "   --------------------------------------------------------------"
   echo "   KAFKA CAPTURE SETTINGS"
@@ -115,7 +117,7 @@ if [ "$CHECK" -eq 0 ] && [ -t 0 ]; then
     done
   fi
   echo "   --------------------------------------------------------------"
-elif [ "$CHECK" -eq 0 ] && { [ "$GOT_INT" -eq 0 ] || [ "$GOT_DUR" -eq 0 ]; }; then
+elif [ "$CHECK" -eq 0 ] && [ "$DUMP" -eq 0 ] && { [ "$GOT_INT" -eq 0 ] || [ "$GOT_DUR" -eq 0 ]; }; then
   [ "$DURATION" -eq 0 ] && DURATION=3600
   echo "[*] no terminal to prompt on — using defaults (-i $INT, -d $DURATION)"
 fi
@@ -205,6 +207,19 @@ for r in d["data"].get("result", []):
 # Which names exist depends entirely on your JMX exporter rules, which differ
 # between Strimzi versions and between hand-written configs. So we read the
 # real list from Thanos and match against it instead of guessing.
+# The exporter on the broker is the authority on which series exist: it lists
+# every name in its own `# TYPE` lines. Thanos' label API and a probe of guessed
+# names are both incomplete next to that, which is why handler-idle and the queue
+# depths came back blank on a cluster publishing 7,000+ kafka metrics.
+exporter_names() {
+  [ -z "${BPOD:-}" ] && return 0
+  for port in 9404 9308; do
+    oc -n "$NS" exec "$BPOD" -c kafka -- \
+      sh -c "curl -s --max-time 10 localhost:$port/metrics" 2>/dev/null \
+    | sed -n 's/^# TYPE \([a-zA-Z_:][a-zA-Z0-9_:]*\) .*/\1/p'
+  done
+}
+
 load_metric_names() {
   for sel in 'kafka.*' 'jvm.*' 'kubelet_volume_stats.*'; do
     curl -sk --max-time 30 -H "Authorization: Bearer $TOKEN" \
@@ -311,6 +326,7 @@ OPERATOR=$(oc get pods -A --no-headers \
 
 # ---- in-pod CLI probe -----------------------------------------------------
 BPOD=$(printf '%s\n' "$BROKERS" | head -1)
+export BPOD
 KBIN=""; BOOTSTRAP=""; CLI_OK=0
 probe_cli() {
   [ "$USE_CLI" -eq 0 ] && return 1
@@ -338,6 +354,12 @@ probe_cli() {
 
 # ---------------------------------------------------------------- resolve ---
 load_metric_names
+EXPN=0
+if [ -n "${BPOD:-}" ]; then
+  exporter_names >> "$MNAMES" 2>/dev/null
+  sort -u -o "$MNAMES" "$MNAMES"
+  EXPN=$(grep -c . "$MNAMES" 2>/dev/null); EXPN=${EXPN:-0}
+fi
 NMET=$(grep -c . "$MNAMES" 2>/dev/null); NMET=${NMET:-0}
 PROBED=0
 if [ "$NMET" -lt 8 ]; then
@@ -386,6 +408,16 @@ if [ -n "$M_BYTESIN" ]; then
     fi
   done
 fi
+# Does the latency series actually carry a quantile label? Without one, the only
+# thing available is the Max attribute, and calling that "p99" in a report would
+# be a lie — JoinGroup's Max is the rebalance timeout, not a typical latency.
+LAT_Q=0; LAT_KIND="max"
+if [ -n "$M_TOTTIME" ]; then
+  if [ -n "$(qj "$M_TOTTIME{namespace=\"$NS\",quantile=\"0.99\"}" "request" | head -1)" ]; then
+    LAT_Q=1; LAT_KIND="p99"
+  fi
+fi
+
 # which label carries the topic name
 TOPIC_LABEL=""
 if [ -n "$M_BYTESIN" ]; then
@@ -438,7 +470,7 @@ selfcheck() {
     echo "        on the Kafka CR for the full picture."
     fail=1
   fi
-  echo "      resolved series:"
+  echo "      resolved series   (series = how many Thanos actually returns right now):"
   for pair in "bytes in:$M_BYTESIN" "bytes out:$M_BYTESOUT" "messages in:$M_MSGIN" \
               "handler idle:$M_HANDLER" "network idle:$M_NETPROC" \
               "under-replicated:$M_URP" "offline parts:$M_OFFLINE" \
@@ -451,8 +483,16 @@ selfcheck() {
               "JVM heap:$M_HEAP" "GC count:$M_GCCOUNT" "GC time:$M_GCTIME" \
               "consumer lag:$M_CGLAG" "PVC used:$M_PVCUSED"; do
     k=${pair%%:*}; v=${pair#*:}
-    printf "        %-20s %s\n" "$k" "${v:-— not published —}"
+    if [ -z "$v" ]; then
+      printf "        %-20s %-62s %s\n" "$k" "— no matching metric name —" "0"
+    else
+      _n=$(qj "$v{namespace=\"$NS\"}" "" | grep -c . ); _n=${_n:-0}
+      _m=""; [ "$_n" -eq 0 ] && _m="  <- NAME EXISTS BUT NO DATA"
+      printf "        %-20s %-62s %s%s\n" "$k" "$v" "$_n" "$_m"
+    fi
   done
+  printf "      latency quantiles  : %s\n" \
+    "$([ "$LAT_Q" -eq 1 ] && echo "yes — p99 available" || echo "no — only the Max attribute, reported as max")"
   printf "      pod label on JMX series : %s\n" "$POD_LABEL"
   printf "      topic label on JMX series: %s\n" "${TOPIC_LABEL:-— none, per-topic rows unavailable —}"
 
@@ -485,6 +525,13 @@ selfcheck() {
   [ "$fail" -eq 0 ] && echo "READY — safe to run." || echo "FIX THE FAILING STEPS ABOVE (partial collection still works)."
   exit "$fail"
 }
+if [ "${DUMP:-0}" -eq 1 ]; then
+  echo "metric names published by $BPOD (and seen in Thanos), filter: ${DUMPPAT:-all}"
+  if [ -n "${DUMPPAT:-}" ]; then grep -iE "$DUMPPAT" "$MNAMES"; else cat "$MNAMES"; fi
+  echo "---"
+  echo "total: $(grep -c . "$MNAMES") names"
+  exit 0
+fi
 [ "$CHECK" -eq 1 ] && selfcheck
 
 # Which concepts resolved. Passed to the renderer so a missing metric renders as
@@ -648,17 +695,25 @@ while :; do
   # ---------- Thanos: latency by request type ----------
   : > "$TMP/lat"
   if [ -n "$M_TOTTIME" ]; then
-    qj "max by(request) ($M_TOTTIME{namespace=\"$NS\",quantile=\"0.99\"})" "request" > "$TMP/l_tot" 2>/dev/null \
-      || qj "max by(request) ($M_TOTTIME{namespace=\"$NS\"})" "request" > "$TMP/l_tot" || :
-    [ -n "$M_QTIME" ] && qj "max by(request) ($M_QTIME{namespace=\"$NS\",quantile=\"0.99\"})" "request" > "$TMP/l_q" 2>/dev/null || : > "$TMP/l_q"
-    [ -n "$M_LTIME" ] && qj "max by(request) ($M_LTIME{namespace=\"$NS\",quantile=\"0.99\"})" "request" > "$TMP/l_l" 2>/dev/null || : > "$TMP/l_l"
+    _ql=""; [ "$LAT_Q" -eq 1 ] && _ql=',quantile="0.99"'
+    qj "max by(request) ($M_TOTTIME{namespace=\"$NS\"$_ql})" "request" > "$TMP/l_tot" 2>/dev/null
+    [ -s "$TMP/l_tot" ] || : > "$TMP/l_tot"
+    if [ -n "$M_QTIME" ]; then
+      qj "max by(request) ($M_QTIME{namespace=\"$NS\"$_ql})" "request" > "$TMP/l_q" 2>/dev/null
+    fi; [ -s "$TMP/l_q" ] || : > "$TMP/l_q"
+    if [ -n "$M_LTIME" ]; then
+      qj "max by(request) ($M_LTIME{namespace=\"$NS\"$_ql})" "request" > "$TMP/l_l" 2>/dev/null
+    fi; [ -s "$TMP/l_l" ] || : > "$TMP/l_l"
     [ -n "$M_REQRATE" ] && qj "sum by(request) ($(rate_expr "$M_REQRATE" "$W"))" "request" > "$TMP/l_r" || : > "$TMP/l_r"
   else : > "$TMP/l_tot"; : > "$TMP/l_q"; : > "$TMP/l_l"; : > "$TMP/l_r"; fi
 
   # ---------- Thanos: JVM ----------
   if [ -n "$M_HEAP" ]; then
-    qj "sum by($POD_LABEL) ($M_HEAP{namespace=\"$NS\",area=\"heap\"})" "$POD_LABEL" > "$TMP/heap" 2>/dev/null \
-      || qj "sum by($POD_LABEL) ($M_HEAP{namespace=\"$NS\"})" "$POD_LABEL" > "$TMP/heap" || :
+    # `a || b` only runs b when a FAILS. An empty result is a success, so the
+    # area="heap" filter returning nothing silently left heap blank. Test the file.
+    qj "sum by($POD_LABEL) ($M_HEAP{namespace=\"$NS\",area=\"heap\"})" "$POD_LABEL" > "$TMP/heap" 2>/dev/null
+    [ -s "$TMP/heap" ] || qj "sum by($POD_LABEL) ($M_HEAP{namespace=\"$NS\"})" "$POD_LABEL" > "$TMP/heap" 2>/dev/null
+    [ -s "$TMP/heap" ] || : > "$TMP/heap"
   else : > "$TMP/heap"; fi
   [ -n "$M_GCCOUNT" ] && qj "sum by($POD_LABEL) ($(rate_expr "$M_GCCOUNT" "$W"))" "$POD_LABEL" > "$TMP/gcc" || : > "$TMP/gcc"
   [ -n "$M_GCTIME" ]  && qj "sum by($POD_LABEL) ($(rate_expr "$M_GCTIME"  "$W"))" "$POD_LABEL" > "$TMP/gct" || : > "$TMP/gct"
@@ -677,7 +732,7 @@ while :; do
   TS=$(TZ=Asia/Kolkata date '+%Y-%m-%d %H:%M:%S')
 
   # ---------- render + write ----------
-  OUT=$(TS="$TS" EL="$EL" TMPD="$TMP" NS="$NS" HAVE="$HAVE" \
+  OUT=$(TS="$TS" EL="$EL" TMPD="$TMP" NS="$NS" HAVE="$HAVE" LAT_KIND="$LAT_KIND" \
         BROKERS="$BROKERS" CONTROLLERS="$CONTROLLERS" \
         ACTCTL="$ACTCTL" OFFP="$OFFP" UNCL="$UNCL" \
         C_CLU="$C_CLU" C_BRK="$C_BRK" C_TOP="$C_TOP" C_LAT="$C_LAT" \

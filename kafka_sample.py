@@ -261,7 +261,8 @@ if tot_lead and len(brokers) > 1:
 # ---- 3. latency -------------------------------------------------------------
 if l_tot:
     A("")
-    A("  [3] REQUEST LATENCY  (p99 ms, by request type)")
+    _lk = E("LAT_KIND", "p99")
+    A(f"  [3] REQUEST LATENCY  ({_lk} ms, by request type)")
     A("  ----------------------------------------------------------------------------------")
     A(f"  {'REQUEST':<24}{'total ms':>10}{'queue ms':>10}{'local ms':>10}{'req/s':>10}")
     for rq in sorted(l_tot, key=lambda k: -l_tot[k])[:8]:
@@ -270,8 +271,14 @@ if l_tot:
         csv_append(E("C_LAT"), [TS, EL, rq, f"{l_tot.get(rq,0):.2f}",
                                 f"{l_q.get(rq,0):.2f}", f"{l_l.get(rq,0):.2f}",
                                 f"{l_r.get(rq,0):.1f}"])
-    A("      queue ms climbing while local ms stays flat = brokers are backed up,")
-    A("      not slow — add partitions/brokers rather than tuning the broker.")
+    if _lk == "max":
+        A("      NOTE: these are Max-since-start, not percentiles — your exporter")
+        A("      publishes no quantile labels. A Max of tens of seconds is normal")
+        A("      for JoinGroup (rebalance timeout) and means nothing about typical")
+        A("      latency. Add quantile rules to the JMX exporter config for p99.")
+    else:
+        A("      queue ms climbing while local ms stays flat = brokers are backed up,")
+        A("      not slow — add partitions/brokers rather than tuning the broker.")
 
 # ---- 4. topics --------------------------------------------------------------
 if t_in:

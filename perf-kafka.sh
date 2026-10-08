@@ -11,6 +11,7 @@
 #         -d SECS  stop by itself after SECS
 #         -n NS    namespace (default perf-kafka)
 #         -D N     run the expensive in-pod CLI captures every Nth cycle (default 4)
+#         -T HOST  thanos-querier host, if your user cannot list the route
 #         --no-cli skip in-pod CLI entirely (Thanos metrics only)
 #
 # Read-only. Nothing is created, changed or deleted in the cluster.
@@ -40,13 +41,14 @@ CHECK=0
 INT=15; TAG=""
 case "${1:-}" in ''|-*) ;; *) INT="$1"; shift;; esac
 case "${1:-}" in ''|-*) ;; *) TAG="$1"; shift;; esac
-OUTDIR="."; DURATION=0; NS="perf-kafka"; DEEP_EVERY=4; USE_CLI=1
+OUTDIR="."; DURATION=0; NS="perf-kafka"; DEEP_EVERY=4; USE_CLI=1; THANOS=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -o) OUTDIR="${2:-.}"; shift 2;;
     -d) DURATION="${2:-0}"; shift 2;;
     -n) NS="${2:-perf-kafka}"; shift 2;;
     -D) DEEP_EVERY="${2:-4}"; shift 2;;
+    -T) THANOS="${2:-}"; shift 2;;
     --no-cli) USE_CLI=0; shift;;
     *)  shift;;
   esac
@@ -66,9 +68,31 @@ command -v curl    >/dev/null 2>&1 || { echo "ERROR: curl not found in PATH"; ex
 command -v python3 >/dev/null 2>&1 || { echo "ERROR: python3 not found in PATH"; exit 1; }
 
 TOKEN=$(oc whoami -t 2>/dev/null)
-[ -z "$TOKEN" ] && die "ERROR: no oc token (run: oc login)"
-THANOS=$(oc -n openshift-monitoring get route thanos-querier -o jsonpath='{.spec.host}' 2>/dev/null)
-[ -z "$THANOS" ] && die "ERROR: thanos-querier route not found"
+[ -z "$TOKEN" ] && die "ERROR: no oc token in the kubeconfig — run: oc login"
+
+# `oc whoami -t` only READS the kubeconfig; it never calls the API, so an expired
+# session still hands back a token string. Ask the API who we are — that is the
+# call that actually proves the session, and it stops a dead token from being
+# reported later as some unrelated "not found".
+WHOERR="$TMP/whoerr"
+WHO=$(oc whoami 2>"$WHOERR")
+if [ -z "$WHO" ]; then
+  die "ERROR: the oc session is no longer valid — run: oc login
+         oc said: $(head -2 "$WHOERR" 2>/dev/null | tr '\n' ' ')"
+fi
+
+if [ -z "$THANOS" ]; then
+  TERR="$TMP/throute"
+  THANOS=$(oc -n openshift-monitoring get route thanos-querier \
+             -o jsonpath='{.spec.host}' 2>"$TERR")
+  if [ -z "$THANOS" ]; then
+    die "ERROR: could not read the thanos-querier route in openshift-monitoring (as $WHO)
+         oc said: $(head -2 "$TERR" 2>/dev/null | tr '\n' ' ')
+         If your user cannot list routes there but you know the host, pass it:
+           ./perf-kafka.sh -T thanos-querier-openshift-monitoring.apps.preprod.epay.sbi
+         Then run ./perf-kafka.sh --check for the full picture."
+  fi
+fi
 
 now_ms() {
   _t=$(date +%s%3N 2>/dev/null)
@@ -251,9 +275,18 @@ selfcheck() {
   echo "PERF-KAFKA PREFLIGHT"
   echo "--------------------------------------------------------------------------"
   printf " 1. oc client          : "; v=$(oc version --client 2>&1 | head -1); echo "${v:-<no output>}"
-  printf " 2. logged in          : "; [ -n "$TOKEN" ] && echo "yes ($(oc whoami 2>/dev/null))" || { echo "NO"; fail=1; }
+  printf " 2. session valid      : "
+  if [ -n "${WHO:-}" ]; then echo "yes ($WHO)"
+  else echo "NO — token present but the API rejected it. Run: oc login"
+       [ -s "$TMP/whoerr" ] && sed 's/^/      /' "$TMP/whoerr" | head -2
+       fail=1; fi
   printf " 3. namespace          : "; if oc get ns "$NS" >/dev/null 2>&1; then echo "$NS"; else echo "$NS NOT FOUND"; fail=1; fi
-  printf " 4. thanos route       : "; [ -n "$THANOS" ] && echo "$THANOS" || { echo "NOT FOUND"; fail=1; }
+  printf " 4. thanos route       : "
+  if [ -n "$THANOS" ]; then echo "$THANOS"
+  else echo "NOT READABLE"
+       [ -s "$TMP/throute" ] && sed 's/^/      /' "$TMP/throute" | head -2
+       echo "      supply it with -T <host> if your user cannot list routes there"
+       fail=1; fi
   printf " 5. Kafka CR           : "; [ -n "$KCLUSTERS" ] && echo "$(echo $KCLUSTERS | tr '\n' ' ')" || echo "none (pods matched by name instead)"
   printf " 6. broker pods        : "; if [ -n "$BROKERS" ]; then echo "$NBROKER"; printf '%s\n' "$BROKERS" | sed 's/^/      - /'; else echo "NONE"; fail=1; fi
   printf " 7. controller pods    : "

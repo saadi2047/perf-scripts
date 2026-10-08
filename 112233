@@ -55,5 +55,20 @@ Error from server (Forbidden): servicemonitors.monitoring.coreos.com is forbidde
 [osuser@bastion perf-kafka]$ oc -n openshift-monitoring get cm cluster-monitoring-config -o yaml | grep -i enableUserWorkload
     enableUserWorkload: true
 [osuser@bastion perf-kafka]$
+[osuser@bastion perf-kafka]$ ll
+total 172
+-rw-r----- 1 osuser osuser  8492 Oct  8 15:36 kafka_broker_1524.csv
+-rw-r----- 1 osuser osuser  1314 Oct  8 15:36 kafka_cluster_1524.csv
+-rw-r----- 1 osuser osuser    54 Oct  8 15:24 kafka_disk_1524.csv
+-rw-r----- 1 osuser osuser   977 Oct  8 15:36 kafka_health_1524.csv
+-rw-r----- 1 osuser osuser    58 Oct  8 15:24 kafka_jvm_1524.csv
+-rw-r----- 1 osuser osuser  8915 Oct  8 15:36 kafka_lag_1524.csv
+-rw-r----- 1 osuser osuser    62 Oct  8 15:24 kafka_latency_1524.csv
+-rw-r----- 1 osuser osuser 28387 Oct  8 15:36 kafka_pod_1524.csv
+-rw-r----- 1 osuser osuser 45647 Oct  8 15:18 kafka_report.py
+-rw-r----- 1 osuser osuser 13170 Oct  8 15:19 kafka_sample.py
+-rw-r----- 1 osuser osuser    66 Oct  8 15:24 kafka_topic_1524.csv
+-rwxr-x--- 1 osuser osuser 29174 Oct  8 15:23 perf-kafka.sh
+[osuser@bastion perf-kafka]$
 
 

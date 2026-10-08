@@ -1,13 +1,48 @@
-python3 kafka_report.py --tag 1524 -o KAFKA_Report_1524.html
-
-python3 kafka_report.py --tag 1524 -o KAFKA_Report_1524.html
-
-# A. is the exporter actually publishing on the broker?
-oc -n perf-kafka exec perf-kafka-cluster-broker-0 -- \
-   curl -s localhost:9404/metrics 2>/dev/null | grep -c '^kafka_'
-
-# B. can Thanos answer for it directly?
-TOKEN=$(oc whoami -t); THANOS=$(oc -n openshift-monitoring get route thanos-querier -o jsonpath='{.spec.host}')
-curl -sk -H "Authorization: Bearer $TOKEN" \
-  --data-urlencode 'query=kafka_server_replicamanager_underreplicatedpartitions{namespace="perf-kafka"}' \
-  "https://$THANOS/api/v1/query" | head -c 300
+[osuser@bastion perf-kafka]$ ll
+total 172
+-rw-r----- 1 osuser osuser  8492 Oct  8 15:36 kafka_broker_1524.csv
+-rw-r----- 1 osuser osuser  1314 Oct  8 15:36 kafka_cluster_1524.csv
+-rw-r----- 1 osuser osuser    54 Oct  8 15:24 kafka_disk_1524.csv
+-rw-r----- 1 osuser osuser   977 Oct  8 15:36 kafka_health_1524.csv
+-rw-r----- 1 osuser osuser    58 Oct  8 15:24 kafka_jvm_1524.csv
+-rw-r----- 1 osuser osuser  8915 Oct  8 15:36 kafka_lag_1524.csv
+-rw-r----- 1 osuser osuser    62 Oct  8 15:24 kafka_latency_1524.csv
+-rw-r----- 1 osuser osuser 28387 Oct  8 15:36 kafka_pod_1524.csv
+-rw-r----- 1 osuser osuser 45647 Oct  8 15:18 kafka_report.py
+-rw-r----- 1 osuser osuser 13170 Oct  8 15:19 kafka_sample.py
+-rw-r----- 1 osuser osuser    66 Oct  8 15:24 kafka_topic_1524.csv
+-rwxr-x--- 1 osuser osuser 29174 Oct  8 15:23 perf-kafka.sh
+[osuser@bastion perf-kafka]$ python3 kafka_report.py --tag 1524 -o KAFKA_Report_1524.html
+  [window] 1524: 35 samples, 3 brokers, peak in – MB/s
+[kafka-report] wrote KAFKA_Report_1524.html
+[osuser@bastion perf-kafka]$ python3 kafka_report.py --tag 1524 -o KAFKA_Report_1524.html
+  [window] 1524: 35 samples, 3 brokers, peak in – MB/s
+[kafka-report] wrote KAFKA_Report_1524.html
+[osuser@bastion perf-kafka]$ ll
+total 256
+-rw-r----- 1 osuser osuser  8492 Oct  8 15:36 kafka_broker_1524.csv
+-rw-r----- 1 osuser osuser  1314 Oct  8 15:36 kafka_cluster_1524.csv
+-rw-r----- 1 osuser osuser    54 Oct  8 15:24 kafka_disk_1524.csv
+-rw-r----- 1 osuser osuser   977 Oct  8 15:36 kafka_health_1524.csv
+-rw-r----- 1 osuser osuser    58 Oct  8 15:24 kafka_jvm_1524.csv
+-rw-r----- 1 osuser osuser  8915 Oct  8 15:36 kafka_lag_1524.csv
+-rw-r----- 1 osuser osuser    62 Oct  8 15:24 kafka_latency_1524.csv
+-rw-r----- 1 osuser osuser 28387 Oct  8 15:36 kafka_pod_1524.csv
+-rw-r----- 1 osuser osuser 83189 Oct  8 15:46 KAFKA_Report_1524.html
+-rw-r----- 1 osuser osuser 45647 Oct  8 15:18 kafka_report.py
+-rw-r----- 1 osuser osuser 13170 Oct  8 15:19 kafka_sample.py
+-rw-r----- 1 osuser osuser    66 Oct  8 15:24 kafka_topic_1524.csv
+-rwxr-x--- 1 osuser osuser 29174 Oct  8 15:23 perf-kafka.sh
+[osuser@bastion perf-kafka]$ pwd
+/home/osuser/saadi/M/Muzzammil/perf-kafka
+[osuser@bastion perf-kafka]$ oc whoami
+V1021008
+[osuser@bastion perf-kafka]$ oc -n perf-kafka exec perf-kafka-cluster-broker-0 -- \
+>    curl -s localhost:9404/metrics 2>/dev/null | grep -c '^kafka_'
+7271
+[osuser@bastion perf-kafka]$ TOKEN=$(oc whoami -t); THANOS=$(oc -n openshift-monitoring get route thanos-querier -o jsonpath='{.spec.host}')
+[osuser@bastion perf-kafka]$ curl -sk -H "Authorization: Bearer $TOKEN" \
+>   --data-urlencode 'query=kafka_server_replicamanager_underreplicatedpartitions{namespace="perf-kafka"}' \
+>   "https://$THANOS/api/v1/query" | head -c 300
+{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"kafka_server_replicamanager_underreplicatedpartitions","container":"kafka","endpoint":"tcp-prometheus","instance":"172.16.42.15:9404","job":"perf-kafka/kafka-resources-metrics","kubernetes_pod_name":"perf-kafka-cluste[osuser@bastion perf-kafka]$
+[osuser@bastion perf-kafka]$

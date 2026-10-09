@@ -132,6 +132,7 @@ MB = 1024.0 * 1024.0
 bin_, bout, bmsg = rd("in"), rd("out"), rd("msg")
 handler, netproc = rd("handler"), rd("netproc")
 reqq, respq, purg = rd("reqq"), rd("respq"), rd("purg")
+purg_prod = rd("purg_prod")
 urp, parts, leaders = rd("urp"), rd("parts"), rd("leaders")
 atminisr = rd("atminisr")
 flag = rd("fetchlag")
@@ -309,7 +310,8 @@ for b in sorted(brokers):
                             _n(opt("parts", parts, b)), _n(opt("leaders", leaders, b)),
                             f"{shrink.get(b,0):.4f}", f"{expand.get(b,0):.4f}",
                             f"{flag.get(b,0):.0f}",
-                            _n(opt("atminisr", atminisr, b))])
+                            _n(opt("atminisr", atminisr, b)),
+                            _n(opt("purg_prod", purg_prod, b))])
 if not brokers:
     A("      (no broker pods resolved)")
 

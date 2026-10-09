@@ -15,7 +15,7 @@ import os, re, csv, argparse, datetime, textwrap, statistics as st
 
 # Bumped whenever the report's judgement changes, so a file can always be traced
 # to the build that produced it. Printed in the masthead and by --version.
-KR_VERSION = "2026-10-09.10 (frozen latency, verbatim appendix, data-driven captions)"
+KR_VERSION = "2026-10-09.11 (idle provenance, produce purgatory)"
 
 def read(p):
     if not p or not os.path.exists(p):
@@ -388,6 +388,11 @@ class Win:
             except OSError:
                 pass
         self.lat_kind = self.info.get("latency_kind", "")
+        # Where the saturation figure came from. A windowed rate off the
+        # cumulative counter is a real measurement of this window; the Meter's
+        # MeanRate gauge is a since-broker-start average and is not.
+        self.idle_src = self.info.get("idle_source", "")
+        self.net_src = self.info.get("net_idle_source", "")
         self.lat_label = {"p99": "p99", "max": "max"}.get(self.lat_kind, "peak")
         g = lambda n: read(os.path.join(d, f"kafka_{n}_{tag}.csv"))
         self.clu, self.brk, self.top = g("cluster"), g("broker"), g("topic")
@@ -429,6 +434,10 @@ class Win:
         self.max_atminisr = self.peak_of_sum(self.brk, "at_min_isr")
         self.max_reqq = pk(self.brk, "request_queue")
         self.max_purg = pk(self.brk, "purgatory")
+        # Fetch purgatory is large on an idle cluster by design — every follower
+        # and consumer long-poll waits there. Produce purgatory is the one that
+        # means acks are not completing.
+        self.max_purg_prod = pk(self.brk, "purgatory_produce")
         self.max_lag = None
         if self.lag:
             per = {}
@@ -519,6 +528,8 @@ class Win:
             if vals and all(len(set(v)) == 1 and v[0] for v in vals):
                 self.idle_frozen = True
                 self.xchecks.append(
+                    ("The collector fell back to the MeanRate gauge because this exporter publishes "
+                     "no idle counter. " if self.idle_src == "meanrate_gauge" else "") +
                     "Request-handler idle is byte-identical in every sample for every broker "
                     f"({', '.join(sorted({v[0] + '%' for v in vals}))}). A live gauge varies; this is "
                     "the exporter's <b>mean since broker start</b>, which on a long-running broker is "
@@ -819,7 +830,10 @@ def sec_brokers(w):
     h.append('<div class="tbl-wrap"><table><tr><th>Broker</th><th class="num">MB/s in pk</th>'
              '<th class="num">MB/s out pk</th><th class="num">msg/s pk</th>'
              '<th class="num">hnd idle min</th><th class="num">net idle min</th>'
-             '<th class="num">reqQ pk</th><th class="num">purg pk</th>'
+             '<th class="num">reqQ pk</th><th class="num">purg pk<br>'
+             '<span style="font-weight:400;text-transform:none">(fetch)</span></th>'
+             '<th class="num">purg pk<br>'
+             '<span style="font-weight:400;text-transform:none">(produce)</span></th>'
              '<th class="num">URP pk</th><th class="num">leaders</th><th>Reading</th></tr>')
     T = dict(i=0, o=0, m=0, q=0, p=0, u=0, l=0)
     for b in sorted(per):
@@ -828,6 +842,7 @@ def sec_brokers(w):
         hi = mn(rs, "handler_idle_pct")
         ni = None if w.net_bad else mn(rs, "network_idle_pct")
         q, pu = pk(rs, "request_queue"), pk(rs, "purgatory")
+        pup = pk(rs, "purgatory_produce")
         u, le = pk(rs, "under_replicated"), pk(rs, "leaders")
         # "healthy headroom" must never be the fallback for a missing figure.
         # An absent or refused idle percentage is unknown, not good — and nor is
@@ -849,25 +864,35 @@ def sec_brokers(w):
         for k, v in (("i", i_), ("o", o_), ("m", m_)):
             T[k] += v or 0
         T["q"] = max(T["q"], q or 0); T["p"] = max(T["p"], pu or 0)
+        T["pp"] = max(T.get("pp", 0), pup or 0)
         T["u"] = max(T["u"], u or 0); T["l"] += le or 0
         pill = f'<span class="pill {cls}">{f1(hi,"%")}</span>' if hi is not None else '<span class="pill mut">–</span>'
         h.append(f'<tr><td class="mono">{esc(b)}</td><td class="num">{fv(i_)}</td>'
                  f'<td class="num">{fv(o_)}</td><td class="num">{n0(m_)}</td>'
                  f'<td class="num">{pill}</td><td class="num">{f1(ni,"%")}</td>'
                  f'<td class="num">{n0(q)}</td><td class="num">{n0(pu)}</td>'
+                 f'<td class="num">{n0(pup)}</td>'
                  f'<td class="num">{n0(u)}</td><td class="num">{n0(le)}</td>'
                  f'<td class="muted">{txt}</td></tr>')
     h.append(f'<tr class="tot"><td>CLUSTER <span class="muted">({len(per)} brokers)</span></td>'
              f'<td class="num">{fv(T["i"])}</td><td class="num">{fv(T["o"])}</td>'
              f'<td class="num">{n0(T["m"])}</td><td class="num">{f1(w.min_idle,"%")}</td>'
              f'<td class="num">{f1(w.min_net,"%")}</td><td class="num">{n0(T["q"])}</td>'
-             f'<td class="num">{n0(T["p"])}</td><td class="num">{n0(T["u"])}</td>'
+             f'<td class="num">{n0(T["p"])}</td>'
+             f'<td class="num">{n0(T.get("pp") or None) if T.get("pp") is not None else "–"}</td>'
+             f'<td class="num">{n0(T["u"])}</td>'
              f'<td class="num">{n0(T["l"])}</td><td class="muted"></td></tr>')
     h.append("</table></div>")
     h.append('<p class="muted">The in/out/msg columns sum per-broker peaks, which may slightly overstate the '
              'cluster peak because brokers peak at different moments — the window chart above is the '
              'authority for a simultaneous cluster total. Idle and queue columns show the worst single '
              'broker, which is what actually limits the cluster.</p>')
+    h.append('<p class="muted">Purgatory is split because the two halves mean opposite things. '
+             '<b>Fetch</b> purgatory is large on a healthy idle cluster by design — every follower '
+             'and every long-polling consumer parks there waiting for data, so tens of thousands is '
+             'normal and tells you nothing. <b>Produce</b> purgatory is the one to watch: entries '
+             'there are writes waiting on <span class="mono">acks</span> from followers, so a rising '
+             'figure means replication is not keeping up with producers.</p>')
     # idle chart
     series, cols = [], [S1, S2, S3, S4, S5]
     for n, b in enumerate(sorted(per)[:5]):

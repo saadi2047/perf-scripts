@@ -44,7 +44,7 @@ set -u
 # Bump on every change. Printed at startup, by --version and by --check, and
 # written into each run folder, so there is never any doubt about which build
 # produced a given set of CSVs.
-PK_VERSION="2026-10-09.7  (double-count fix, anchored partition regex, at-min-ISR)"
+PK_VERSION="2026-10-09.11 (controller metrics, windowed idle, split purgatory)"
 
 CHECK=0
 case "${1:-}" in
@@ -211,7 +211,12 @@ for r in d["data"].get("result", []):
     try: val=float(r["value"][1])
     except Exception: val=0.0
     if val!=val or val in (float("inf"), float("-inf")): val=0.0
-    out.append("%.6g" % val)
+    # %.6g gives six significant figures. On a cumulative counter around
+    # 1.8e15 nanoseconds that is one-second resolution, so a 20s sample
+    # quantises to ~5% error — enough to push a derived idle percentage past
+    # 100%. The series names and values here are machine-read, not displayed,
+    # so there is no reason to round at all.
+    out.append(repr(val) if val != int(val) else "%d" % int(val))
     print("\t".join(out))
 '
 }
@@ -224,12 +229,27 @@ for r in d["data"].get("result", []):
 # every name in its own `# TYPE` lines. Thanos' label API and a probe of guessed
 # names are both incomplete next to that, which is why handler-idle and the queue
 # depths came back blank on a cluster publishing 7,000+ kafka metrics.
+# Read the exporter on a BROKER *and* on a CONTROLLER.
+#
+# This is why active-controller count, offline partitions and unclean elections
+# all read "not published": they are KafkaController MBeans, and in KRaft with
+# separate roles those live only on the controller JVMs. Scraping one broker's
+# /metrics meant those names never entered the catalogue, so find_metric
+# returned empty and the collector reported them as absent — when in fact it had
+# never looked anywhere they could exist. A kafka-exporter pod, if deployed,
+# adds the consumer-group lag series for the same reason.
 exporter_names() {
-  [ -z "${BPOD:-}" ] && return 0
-  for port in 9404 9308; do
-    oc -n "$NS" exec "$BPOD" -c kafka -- \
-      sh -c "curl -s --max-time 10 localhost:$port/metrics" 2>/dev/null \
-    | sed -n 's/^# TYPE \([a-zA-Z_:][a-zA-Z0-9_:]*\) .*/\1/p'
+  for _pod in ${EXP_PODS:-}; do
+    [ -z "$_pod" ] && continue
+    for _c in kafka ""; do
+      _cargs=""; [ -n "$_c" ] && _cargs="-c $_c"
+      for port in 9404 9308; do
+        # shellcheck disable=SC2086
+        oc -n "$NS" exec "$_pod" $_cargs -- \
+          sh -c "curl -s --max-time 10 localhost:$port/metrics" 2>/dev/null \
+        | sed -n 's/^# TYPE \([a-zA-Z_:][a-zA-Z0-9_:]*\) .*/\1/p'
+      done
+    done
   done
 }
 
@@ -409,8 +429,16 @@ probe_cli() {
 
 # ---------------------------------------------------------------- resolve ---
 load_metric_names
+# One broker, one controller, and kafka-exporter if it is deployed. Each JVM
+# publishes a different slice of the MBean tree, so the catalogue has to be the
+# union — reading only a broker is what hid the controller metrics.
+EXP_PODS="${BPOD:-}"
+_ctl=$(printf '%s\n' "$CONTROLLERS" | grep -c . 2>/dev/null) || _ctl=0
+[ "${_ctl:-0}" -gt 0 ] && EXP_PODS="$EXP_PODS $(printf '%s\n' "$CONTROLLERS" | head -1)"
+[ -n "${EXPORTER:-}" ] && EXP_PODS="$EXP_PODS $EXPORTER"
+export EXP_PODS
 EXPN=0
-if [ -n "${BPOD:-}" ]; then
+if [ -n "$(printf '%s' "$EXP_PODS" | tr -d ' ')" ]; then
   exporter_names >> "$MNAMES" 2>/dev/null
   sort -u -o "$MNAMES" "$MNAMES"
   EXPN=$(grep -c . "$MNAMES" 2>/dev/null); EXPN=${EXPN:-0}
@@ -429,7 +457,20 @@ M_BYTESIN=$(find_metric 'brokertopicmetrics.*bytesin|bytes_in_per_sec|bytesinper
 M_BYTESOUT=$(find_metric 'brokertopicmetrics.*bytesout|bytes_out_per_sec|bytesoutpersec' counter)
 M_MSGIN=$(find_metric 'brokertopicmetrics.*messagesin|messages_in_per_sec|messagesinpersec' counter)
 M_HANDLER=$(find_metric 'requesthandler.*idle|request_handler.*idle' gauge)
+# RequestHandlerAvgIdlePercent is a Yammer Meter. The stock Strimzi exporter
+# rules map its MeanRate to a gauge (their kafka-metrics.yaml line 61 says so in
+# a comment) — mean since BROKER START, which on a broker up for weeks is pinned
+# near its long-run average and cannot move during a load window. The Count
+# attribute is the useful one: cumulative nanoseconds of idle time already
+# divided by thread count inside Kafka, so rate()/1e9 is the live idle fraction.
+M_HANDLER_C=$(find_metric 'requesthandler.*idle.*_(count|total)$' counter)
 M_NETPROC=$(find_metric 'networkprocessor.*idle|network_processor.*idle' gauge)
+# NetworkProcessorAvgIdlePercent sums io-wait-ratio over the processors of EVERY
+# data-plane listener and divides by their total count, and a processor with no
+# recorded ratio contributes 0 (counted as fully busy). With 8 network threads
+# across three listeners that reads ~24% on an idle cluster. The per-listener
+# series is exact, and the stock rules already publish it.
+M_IOWAIT=$(find_metric 'socket_server_metrics_io_wait_ratio$|socket.server.*io_wait_ratio$' gauge)
 M_URP=$(find_metric 'underreplicatedpartitions|under_replicated_partitions' gauge)
 M_OFFLINE=$(find_metric 'offlinepartitionscount|offline_partitions_count' gauge)
 M_ACTIVECTL=$(find_metric 'activecontrollercount|active_controller_count' gauge)
@@ -460,8 +501,8 @@ M_REQRATE=$(find_metric 'requestmetrics.*requestspersec|requests_per_sec' counte
 M_FETCHLAG=$(find_metric 'fetcherlag|consumer_lag|replica.*lag' gauge)
 M_LOGSIZE=$(find_metric 'log_size|logsize' gauge)
 M_HEAP=$(find_metric '^jvm_memory_bytes_used$|^jvm_memory_used_bytes$' gauge)
-M_GCCOUNT=$(find_metric '^jvm_gc_collection_seconds_count$|^jvm_gc_pause_seconds_count$' counter)
-M_GCTIME=$(find_metric '^jvm_gc_collection_seconds_sum$|^jvm_gc_pause_seconds_sum$' counter)
+M_GCCOUNT=$(find_metric '^jvm_gc_[a-z_]*_seconds_count$' counter)
+M_GCTIME=$(find_metric '^jvm_gc_[a-z_]*_seconds_sum$' counter)
 M_CGLAG=$(find_metric '^kafka_consumergroup_lag$|consumergroup_lag' gauge)
 # PVC usage comes from the kubelet, not from Kafka. The name catalogue is built
 # mostly from the broker's own JMX exporter, which obviously never publishes a
@@ -626,6 +667,7 @@ HAVE=""
 for pair in "bytesin:$M_BYTESIN" "handler:$M_HANDLER" "netproc:$M_NETPROC" \
             "urp:$M_URP" "parts:$M_PARTS" "leaders:$M_LEADERS" "atminisr:$M_ATMINISR" \
             "reqq:$M_REQQ" "respq:$M_RESPQ" "purg:$M_PURG" \
+            "purg_prod:$M_PURG" "handler_c:$M_HANDLER_C" "iowait:$M_IOWAIT" \
             "isr:$M_ISRSHRINK" "fetchlag:$M_FETCHLAG" "heap:$M_HEAP" "gc:$M_GCCOUNT"; do
   [ -n "${pair#*:}" ] && HAVE="$HAVE ${pair%%:*}"
 done
@@ -645,7 +687,7 @@ C_LAG="$OUTDIR/kafka_lag_${TAG}.csv"
 C_HLT="$OUTDIR/kafka_health_${TAG}.csv"
 
 echo "ts_ist,elapsed_s,active_controllers,offline_partitions,under_replicated,unclean_elections,partitions_total,leaders_total,bytes_in_mb_s,bytes_out_mb_s,messages_in_s" > "$C_CLU"
-echo "ts_ist,elapsed_s,pod,bytes_in_mb_s,bytes_out_mb_s,messages_in_s,handler_idle_pct,network_idle_pct,request_queue,response_queue,purgatory,under_replicated,partitions,leaders,isr_shrink_s,isr_expand_s,follower_lag,at_min_isr" > "$C_BRK"
+echo "ts_ist,elapsed_s,pod,bytes_in_mb_s,bytes_out_mb_s,messages_in_s,handler_idle_pct,network_idle_pct,request_queue,response_queue,purgatory,under_replicated,partitions,leaders,isr_shrink_s,isr_expand_s,follower_lag,at_min_isr,purgatory_produce" > "$C_BRK"
 echo "ts_ist,elapsed_s,topic,bytes_in_mb_s,bytes_out_mb_s,messages_in_s" > "$C_TOP"
 echo "ts_ist,elapsed_s,request,total_ms,queue_ms,local_ms,req_per_s" > "$C_LAT"
 echo "ts_ist,elapsed_s,pod,heap_used_mb,gc_count_s,gc_time_ms_s" > "$C_JVM"
@@ -743,6 +785,12 @@ printf "      run folder : %s\n" "$OUTDIR"
   echo "namespace=$NS"; echo "interval_s=$INT"; echo "duration_s=$DURATION"
   echo "tag=$TAG"; echo "brokers=$NBROKER"
   echo "latency_kind=$LAT_KIND"
+  # The report labels the saturation figure by its provenance: a windowed rate
+  # off the counter is a real measurement; the MeanRate gauge is not.
+  if [ -n "$M_HANDLER_C" ]; then echo "idle_source=counter_rate"
+  else echo "idle_source=meanrate_gauge"; fi
+  if [ -n "$M_IOWAIT" ]; then echo "net_idle_source=per_listener"
+  else echo "net_idle_source=aggregate_gauge"; fi
 } > "$OUTDIR/run_info.txt" 2>/dev/null
 [ "$NOREPORT" -eq 0 ] && printf "      the HTML report is built automatically when the window closes\n"
 echo
@@ -771,11 +819,47 @@ while :; do
     qj "sum by($POD_LABEL) ($(rate_expr "$M_BYTESOUT" "$W" "$AGG_SEL"))" "$POD_LABEL" > "$TMP/out" || :
     qj "sum by($POD_LABEL) ($(rate_expr "$M_MSGIN"    "$W" "$AGG_SEL"))" "$POD_LABEL" > "$TMP/msg" || :
   else : > "$TMP/in"; : > "$TMP/out"; : > "$TMP/msg"; fi
-  for m in HANDLER NETPROC REQQ RESPQ PURG URP PARTS LEADERS FETCHLAG ATMINISR; do
+  for m in HANDLER NETPROC REQQ RESPQ URP PARTS LEADERS FETCHLAG ATMINISR; do
     eval "nm=\$M_$m"
     f="$TMP/$(echo $m | tr 'A-Z' 'a-z')"
     if [ -n "$nm" ]; then qj "sum by($POD_LABEL) ($nm{namespace=\"$NS\"})" "$POD_LABEL" > "$f" || :; else : > "$f"; fi
   done
+
+  # ---------- handler idle, measured over THIS window ----------
+  # rate() of the cumulative idle-nanoseconds counter / 1e9 = idle fraction now.
+  # The gauge beside it is a since-broker-start mean and is kept only as a
+  # fallback, flagged, for exporters that publish no counter.
+  : > "$TMP/handler_w"
+  if [ -n "$M_HANDLER_C" ]; then
+    qj "sum by($POD_LABEL) (rate($M_HANDLER_C{namespace=\"$NS\"}[${W}])) * 100 / 1e9" \
+       "$POD_LABEL" > "$TMP/handler_w" 2>/dev/null || :
+  fi
+  # A live reading wins over the frozen mean; an empty result must not clobber it.
+  if [ -s "$TMP/handler_w" ]; then cp "$TMP/handler_w" "$TMP/handler"; fi
+
+  # ---------- purgatory, split by what is actually waiting ----------
+  # Summed across every delayedOperation, Fetch long-polls dominate and the
+  # total is large on a completely idle cluster, which says nothing. Produce
+  # purgatory is the one that indicates trouble.
+  : > "$TMP/purg"; : > "$TMP/purg_prod"
+  if [ -n "$M_PURG" ]; then
+    qj "sum by($POD_LABEL) ($M_PURG{namespace=\"$NS\",delayedOperation=\"Fetch\"})" \
+       "$POD_LABEL" > "$TMP/purg" 2>/dev/null || :
+    qj "sum by($POD_LABEL) ($M_PURG{namespace=\"$NS\",delayedOperation=\"Produce\"})" \
+       "$POD_LABEL" > "$TMP/purg_prod" 2>/dev/null || :
+    # no delayedOperation label on this exporter: fall back to the plain sum
+    [ -s "$TMP/purg" ] || qj "sum by($POD_LABEL) ($M_PURG{namespace=\"$NS\"})" \
+       "$POD_LABEL" > "$TMP/purg" 2>/dev/null || :
+  fi
+
+  # ---------- network idle, per listener ----------
+  # `> 0` drops listeners whose processors never recorded a ratio; min() then
+  # gives the busiest listener that is actually carrying connections.
+  if [ -n "$M_IOWAIT" ]; then
+    qj "min by($POD_LABEL) ($M_IOWAIT{namespace=\"$NS\"} > 0) * 100" \
+       "$POD_LABEL" > "$TMP/netproc_w" 2>/dev/null || :
+    [ -s "$TMP/netproc_w" ] && cp "$TMP/netproc_w" "$TMP/netproc"
+  fi
   for m in ISRSHRINK ISREXPAND; do
     eval "nm=\$M_$m"
     f="$TMP/$(echo $m | tr 'A-Z' 'a-z')"

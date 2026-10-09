@@ -1,4 +1,124 @@
-kafka-topics.sh --bootstrap-server localhost:9092 --describe \
-  --topic transaction_push_verification_topic
 
+
+
+==================================================================================
+   PERF-KAFKA — 2026-10-09 16:34:05 IST    cycle 10s set / 30s actual    ns=perf-kafka    tag=1630
+   elapsed 3m05s    REMAINING 0m00s     ends ~16:34:00 IST   sample 6/6
+   [########################################] 100%
+   window start 2026-10-09 16:31:00 IST
+==================================================================================
+  [1] CLUSTER HEALTH
+  ----------------------------------------------------------------------------------
+      active controllers         not published   (metric absent)
+      offline partitions         not published   (metric absent)
+      under-replicated                      0   OK all replicas in sync
+      unclean elections/s        not published   (metric absent)
+      partitions / leaders                  8 / 163
+      throughput                         0.08 MB/s in   0.00 MB/s out   650 msg/s
+
+  [2] BROKERS   (idle% is the saturation signal: <30% = request handlers starved)
+  ----------------------------------------------------------------------------------
+  BROKER                        MB/s in MB/s out    msg/s hnd idle net idle  reqQ   purg  URP  part  lead
+  -------------------------------------------------------------------------------------------------------
+  perf-kafka-cluster-broker-0      0.02     0.00      180    98.9%    23.8%     0  29134    0     2    53
+  perf-kafka-cluster-broker-1      0.00     0.00        0    99.8%    24.0%     0   4483    0     2    55
+  perf-kafka-cluster-broker-2      0.06     0.00      470    92.4%    23.4%     0  28027    0     4    55
+      leader balance: max/min 1.04x (even)
+
+  [3] REQUEST LATENCY  (p99 ms, by request type)
+  ----------------------------------------------------------------------------------
+  REQUEST                   total ms  queue ms  local ms     req/s
+  JoinGroup                  43287.0       5.0       6.0         0
+  Vote                       28972.6       0.0       0.0         0
+  EndQuorumEpoch             23376.0       0.0       0.0         0
+  DescribeLogDirs            16965.8   16901.5   16965.5         0
+  ListOffsets                13666.3   13568.6       1.0         0
+  Metadata                    9501.8    9501.8       0.0         0
+  DescribeClientQuotas        9008.8    9008.8       0.0         0
+  DescribeCluster             8058.6    8058.0       0.0         0
+      NOTE: no request type had a measurable rate — every row above is
+      background chatter (Cruise Control, the operator, KRaft quorum).
+      These are not load-test latencies and imply nothing about capacity.
+
+  [4] TOP TOPICS BY INGRESS
+  ----------------------------------------------------------------------------------
+  TOPIC                                        MB/s in  MB/s out     msg/s
+  __consumer_offsets                             0.042     0.000       304
+  strimzi.cruisecontrol.metrics                  0.000     0.000         9
+  strimzi.cruisecontro~rtitionmetricsamples      0.000     0.000         2
+  strimzi.cruisecontro~modeltrainingsamples      0.000     0.000         0
+  transaction_push_verification_topic            0.000     0.000         0
+
+  [5] PODS   (placement, resources, JVM)
+  ----------------------------------------------------------------------------------
+  POD                           ROLE        NODE              RDY  RST     CPU   MEM Mi  heap Mi   GC/s
+  perf-kafka-cluster-broker-0   broker      kafbroker1        1/1    0    790m     8692     5199      -
+  perf-kafka-cluster-broker-1   broker      kafbroker3        1/1    0    132m     8388     4092      -
+  perf-kafka-cluster-broker-2   broker      kafbroker2        1/1    0    510m    12634     5357      -
+  perf-kafka-clu~r-controller-3 controller  kafbroker3        1/1    0     95m     3229     2124      -
+  perf-kafka-clu~r-controller-4 controller  kafbroker1        1/1    0     83m     3243     1650      -
+  perf-kafka-clu~r-controller-5 controller  kafbroker2        1/1    0     35m     4229     1626      -
+  perf-kafka-clu~889b47d8-kkq8v cruise-ctl  worker4           1/1    3     14m     1638        -      -
+  perf-kafka-clu~4578cbfd-r5kg8 entity-op   worker5           2/2    0      9m      949      107      -
+
+  [6] STORAGE
+  ----------------------------------------------------------------------------------
+  PVC                                            used GB   size GB   used %
+  data-0-perf-kafka-cluster-broker-1                 4.8     107.4     4.5%
+  data-0-perf-kafka-cluster-broker-0                 4.5     107.4     4.2%
+  data-1-perf-kafka-cluster-broker-2                 4.2     107.4     4.0%
+  data-0-perf-kafka-cluster-broker-2                 3.1     107.4     2.9%
+  data-1-perf-kafka-cluster-broker-0                 3.1     107.4     2.9%
+  data-1-perf-kafka-cluster-broker-1                 1.7     107.4     1.6%
+  data-0-perf-kafka-cluster-controller-5             0.0     107.4     0.0%
+  data-0-perf-kafka-cluster-controller-4             0.0     107.4     0.0%
+  data-0-perf-kafka-cluster-controller-3             0.0     107.4     0.0%
+==================================================================================
+   0m00s remaining (ends ~16:34:00 IST)   |   Ctrl-C to stop early and still get the report
+   CSVs: /home/osuser/saadi/M/Muzzammil/perf-kafka/kafka-test-20261009_163035/kafka_*_1630.csv
+[*] requested 180s reached — no further samples will start.
+
+==================================================================================
+   PERF-KAFKA WINDOW SUMMARY   (tag: 1630, namespace: perf-kafka)
+==================================================================================
+   START / END (IST) : 2026-10-09 16:31:00  ->  2026-10-09 16:34:15
+   DURATION          : 195s (3.2 min) over 6 samples   (requested 180s; the final sample was allowed to finish)
+   BROKERS           : 3
+   PEAK THROUGHPUT   : in 0.09 MB/s   out 0.00 MB/s   701 msg/s
+   WORST HANDLER IDLE: 92.4%   (under 30% = brokers saturated)
+   MAX UNDER-REPL    : 0   (must return to 0)
+   MAX CONSUMER LAG  : 0
+==================================================================================
+   CSVs in /home/osuser/saadi/M/Muzzammil/perf-kafka/kafka-test-20261009_163035  (tag 1630)
+
+[*] building the HTML report...
+  [window] 1630: 6 samples, 3 brokers, peak in 0.1 MB/s
+[kafka-report] wrote /home/osuser/saadi/M/Muzzammil/perf-kafka/kafka-test-20261009_163035/KAFKA_Report_20261009_163415.html
+[OK] REPORT: /home/osuser/saadi/M/Muzzammil/perf-kafka/kafka-test-20261009_163035/KAFKA_Report_20261009_163415.html
+[osuser@bastion perf-kafka]$
+
+[osuser@bastion perf-kafka]$ oc get po
+NAME                                                    READY   STATUS    RESTARTS      AGE
+perf-kafka-cluster-broker-0                             1/1     Running   0             22d
+perf-kafka-cluster-broker-1                             1/1     Running   0             22d
+perf-kafka-cluster-broker-2                             1/1     Running   0             22d
+perf-kafka-cluster-controller-3                         1/1     Running   0             22d
+perf-kafka-cluster-controller-4                         1/1     Running   0             22d
+perf-kafka-cluster-controller-5                         1/1     Running   0             22d
+perf-kafka-cluster-cruise-control-7b889b47d8-kkq8v      1/1     Running   3 (40h ago)   22d
+perf-kafka-cluster-entity-operator-f4578cbfd-r5kg8      2/2     Running   0             22d
+perf-kafka-console-console-deployment-6c7cb6cdb-hbg6l   2/2     Running   0             22d
+[osuser@bastion perf-kafka]$ oc rsh perf-kafka-cluster-broker-0
+cdDefaulted container "kafka" out of: kafka, dynatrace-operator (init)
+cdcdsh-5.1$ cd bin
+sh-5.1$ pwd
+/opt/kafka/bin
+sh-5.1$ ./kafka-topics.sh --bootstrap-server localhost:9092 --describe \
+  --topic transaction_push_verification_topic
+Topic: transaction_push_verification_topic      TopicId: aI6DKCXKSQmLCHht4-X8Gw PartitionCount: 4       ReplicationFactor: 3    Configs: compression.type=producer,min.insync.replicas=2,cleanup.policy=delete,segment.bytes=1073741824
+        Topic: transaction_push_verification_topic      Partition: 0    Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: transaction_push_verification_topic      Partition: 1    Leader: 0       Replicas: 0,1,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: transaction_push_verification_topic      Partition: 2    Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: transaction_push_verification_topic      Partition: 3    Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+sh-5.1$
 

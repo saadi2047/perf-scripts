@@ -15,7 +15,7 @@ import os, re, csv, argparse, datetime, textwrap, statistics as st
 
 # Bumped whenever the report's judgement changes, so a file can always be traced
 # to the build that produced it. Printed in the masthead and by --version.
-KR_VERSION = "2026-10-09.9  (data-quality notes to console, not the page)"
+KR_VERSION = "2026-10-09.10 (frozen latency, verbatim appendix, data-driven captions)"
 
 def read(p):
     if not p or not os.path.exists(p):
@@ -134,6 +134,14 @@ def lat_incoherent(t, q, l):
             return True
         if abs(q - t) / t < 0.01 and abs(l - t) / t < 0.01:
             _reject("latency queue/local split", t)
+            return True
+        # queue == total AND local == 0 is the same fault wearing a different
+        # hat: one series resolved into two columns. A request cannot spend
+        # 16 seconds in total and exactly zero of it doing work, and the 100%
+        # queue share it produces invites "the brokers are backed up" on a
+        # cluster whose request queue was 0 at every sample.
+        if abs(q - t) / t < 0.01 and l == 0:
+            _reject("queue equals total with zero local time", t)
             return True
     return False
 
@@ -388,7 +396,14 @@ class Win:
         self.ok = bool(self.clu or self.brk or self.pod)
         c = self.clu
         self.samples = len(c)
+        # `dur` is measured from the run's start, but the window label used the
+        # FIRST SAMPLE's stamp — which is one collection cycle later. The tile
+        # then read "3.0 min" beside stamps only 2.7 min apart. Anchor the label
+        # to the real start so the two agree.
         self.start = c[0]["ts_ist"] if c else (self.pod[0]["ts_ist"] if self.pod else "")
+        _si = (self.info.get("started_ist") or "").strip()
+        if _si:
+            self.start = _si
         self.end = c[-1]["ts_ist"] if c else (self.pod[-1]["ts_ist"] if self.pod else "")
         self.dur = F(c[-1].get("elapsed_s"), 0) if c else 0
         self.brokers = sorted({r["pod"] for r in self.brk}) if self.brk else \
@@ -512,6 +527,26 @@ class Win:
                     "Check for a 1-minute variant with "
                     "<span class=\"mono\">./perf-kafka.sh --metrics idle</span> and prefer that series.")
 
+        # The latency series can be frozen for exactly the same reason as the
+        # idle gauge: Yammer timers decay towards a since-start figure, so a
+        # p99 that is byte-identical in every sample is not this window's p99.
+        # Publishing "43,287 ms p99" as a window measurement is the same class
+        # of error the idle check exists to prevent.
+        self.lat_frozen = False
+        if self.lat and self.samples >= 4:
+            lper = {}
+            for r in self.lat:
+                lper.setdefault(r.get("request", ""), []).append((r.get("total_ms") or "").strip())
+            cols = [v for v in lper.values() if len([x for x in v if x]) >= 4]
+            flat = [v for v in cols if len(set(v)) == 1 and v[0]]
+            if cols and len(flat) >= max(1, int(len(cols) * 0.6)):
+                self.lat_frozen = True
+                self.xchecks.append(
+                    f"{len(flat)} of {len(cols)} request types report a latency that is byte-identical "
+                    "in every sample. Kafka's request timers use decaying reservoirs that drift towards "
+                    "a since-broker-start figure, so these are not this window's percentiles. The "
+                    "latency column is labelled accordingly and no capacity conclusion is drawn from it.")
+
         # A JVM whose heap falls between samples has just run a collection. If
         # the GC rate is identically zero everywhere, the GC series was never
         # resolved — and a report showing "0.00 GC/s" would read as a healthy JVM.
@@ -577,7 +612,12 @@ class Win:
                 continue
             if (pk(rs, "messages_in_s") or 0) > 0 or (pk(rs, "bytes_in_mb_s") or 0) > 0:
                 self.app_topics.append(t)
-        self.idle_topics = [t for t in tper if internal(t)]
+        # Listing every internal topic made the summary name topics that did not
+        # move at all (modeltrainingsamples was zero in all six samples) while
+        # excluding an application topic on identical all-zero evidence.
+        self.idle_topics = [t for t, rs in tper.items() if internal(t)
+                            and ((pk(rs, "messages_in_s") or 0) > 0
+                                 or (pk(rs, "bytes_in_mb_s") or 0) > 0)]
         self.req_rated = (pk(self.lat, "req_per_s") or 0) > 0
         # no application topic moved, and no request type had a measurable rate
         self.no_load = bool(tper) and not self.app_topics and not self.req_rated
@@ -632,8 +672,8 @@ def sec_health(w):
     h = ['<h2>1 · Cluster health — the go / no-go checks</h2>']
     h.append('<p class="muted">These decide whether the run is valid at all. Throughput figures from a '
              'window with offline partitions or unclean elections describe a broken cluster, not a '
-             'benchmark — and partitions sitting at the minimum ISR are one replica loss away from '
-             'rejecting writes.</p>')
+             'benchmark — and partitions already at their minimum in-sync count have no redundancy '
+             'left to lose.</p>')
     rows = []
     if w.have_ctl:
         bad = len(w.ctl_bad)
@@ -659,17 +699,30 @@ def sec_health(w):
     # anything that happened during this window.
     no_spare = (w.max_urp is not None and w.max_urp == 0
                 and w.max_atminisr is not None and w.max_atminisr > 0)
-    atmin_bad = ("these partitions sit at exactly min.insync.replicas, and with no under-replicated "
-                 "partitions their in-sync set already equals their replication factor — so they have "
-                 "<b>no spare replica</b>. Losing one broker takes them below min.insync.replicas and "
-                 "<span class=\"mono\">acks=all</span> producers get NOT_ENOUGH_REPLICAS. Check them with "
-                 "<span class=\"mono\">kafka-topics.sh --describe --at-min-isr-partitions</span>; the usual "
-                 "cause is a topic created with a replication factor below its own "
+    atmin_bad = ("their in-sync set is already down to the minimum the configuration allows, and with "
+                 "no under-replicated partitions that means ISR equals the replication factor — there "
+                 "is <b>no spare replica</b>. Two cases, and JMX cannot tell them apart: if the "
+                 "replication factor is 2, an <span class=\"mono\">acks=all</span> write survives only "
+                 "until the next replica drops; if it is <b>1, below the topic\'s own "
+                 "min.insync.replicas, then acks=all writes are ALREADY being rejected with "
+                 "NOT_ENOUGH_REPLICAS</b> and losing that broker loses the data outright. Identify them "
+                 "now: <span class=\"mono\">kafka-topics.sh --describe --at-min-isr-partitions</span>, "
+                 "and check each one\'s <span class=\"mono\">ReplicationFactor</span> against its "
                  "<span class=\"mono\">min.insync.replicas</span>."
                  if no_spare else
-                 "these partitions sit at exactly min.insync.replicas — one more replica loss and "
-                 "<span class=\"mono\">acks=all</span> producers get NOT_ENOUGH_REPLICAS on them")
-    rows.append(("At min ISR (peak)", w.max_atminisr,
+                 "these partitions sit at the minimum in-sync count their configuration allows — one "
+                 "more replica loss and <span class=\"mono\">acks=all</span> producers get "
+                 "NOT_ENOUGH_REPLICAS on them")
+    if w.leads_tot is not None:
+        _shape = f"{n0(w.leads_tot)} partitions"
+        if w.parts_tot is not None:
+            _shape += f", {n0(w.parts_tot)} replicas ({w.parts_tot / max(1, w.leads_tot):.1f}x)"
+        rows.append(("Cluster shape", None, "info", _shape,
+                     "partition and replica totals, for scale on the counts below"))
+    _amlabel = "At min ISR (peak)"
+    if w.max_atminisr and w.leads_tot:
+        _amlabel += f" — {w.max_atminisr / w.leads_tot * 100:.1f}% of partitions"
+    rows.append((_amlabel, w.max_atminisr,
                  (w.max_atminisr == 0) if w.max_atminisr is not None else None,
                  "every partition had spare in-sync replicas above the minimum",
                  atmin_bad))
@@ -680,6 +733,11 @@ def sec_health(w):
             h.append(f'<tr><td><b>{name}</b></td><td class="num"><span class="pill mut">not published</span></td>'
                      f'<td class="muted">unknown</td>'
                      f'<td class="muted">the JMX exporter does not expose this series</td></tr>')
+            continue
+        if ok == "info":
+            # context, not a check — no PASS/FAIL verdict belongs on it
+            h.append(f'<tr><td><b>{name}</b></td><td class="num">{esc(oktxt)}</td>'
+                     f'<td class="muted">—</td><td class="muted">{badtxt}</td></tr>')
             continue
         pill = f'<span class="pill {"good" if ok else "bad"}">{"PASS" if ok else "FAIL"}</span>'
         shown = val if isinstance(val, str) else n0(val)
@@ -725,9 +783,25 @@ def sec_window(w):
             [{"name": "in MB/s", "color": S1, "pts": pin, "area": True},
              {"name": "out MB/s", "color": S2, "pts": pout}], ylab="MB/s", xfmt=w.xfmt()) + "</div>")
         h.append(legend([("Bytes in (produce)", S1), ("Bytes out (consume + replication)", S2)]))
-        h.append('<p class="muted">Egress above ingress is normal and expected: every message is read by '
-                 'consumers and also copied to each follower replica. With replication factor 3 and one '
-                 'consumer group, roughly 3× ingress is the floor.</p>')
+        # This was fixed boilerplate and fired even when egress was zero,
+        # telling the reader the consume path looked normal when nothing had
+        # been read at all.
+        _in, _out = w.pk_in or 0, w.pk_out or 0
+        if _out > _in:
+            h.append(f'<p class="muted">Egress above ingress is expected: every message is read by '
+                     f'consumers and also copied to each follower replica. Here egress is '
+                     f'{_out / _in:.1f}x ingress.</p>')
+        elif _in > 0 and _out == 0:
+            h.append('<p class="muted">Ingress with <b>no egress at all</b>. '
+                     '<span class="mono">BytesOutPerSec</span> counts client fetches only — follower '
+                     'replication is a separate series — so this means nothing consumed from these '
+                     'brokers during the window. For offset-commit traffic that is normal; if a load '
+                     'test was meant to be reading, it was not.</p>')
+        elif _in > 0:
+            h.append(f'<p class="muted">Egress is {_out / _in:.2f}x ingress. '
+                     '<span class="mono">BytesOutPerSec</span> counts client fetches only, not follower '
+                     'replication, so a ratio below 1 simply means consumers read less than producers '
+                     'wrote during the window.</p>')
     return "".join(h)
 
 
@@ -831,6 +905,13 @@ def sec_latency(w):
              'time dominating means the brokers are <i>backed up</i> and need more capacity or partitions; '
              'local time dominating means each operation is genuinely slow — disk, or too-large batches.</p>')
     K = w.lat_label
+    if getattr(w, "lat_frozen", False):
+        K = K + " *"
+        h.append('<div class="verdict warn"><b>These latency figures did not change during the '
+                 'window.</b> Every value below is identical in every sample, which means they are '
+                 'the brokers\' decaying since-start figures rather than percentiles of this window. '
+                 'Treat them as "the worst this broker has seen since it booted", not as latency '
+                 'under this load — and do not quote them as a window result.</div>')
     if w.lat_kind == "max":
         h.append('<div class="verdict warn"><b>These are Max-since-broker-start, not percentiles.</b> '
                  'The JMX exporter on this cluster publishes no <span class="mono">quantile</span> labels, '
@@ -842,7 +923,13 @@ def sec_latency(w):
     h.append(f'<div class="tbl-wrap"><table><tr><th>Request</th><th class="num">{K} total ms</th>'
              '<th class="num">queue ms</th><th class="num">local ms</th><th class="num">queue share</th>'
              '<th class="num">req/s pk</th><th>Reading</th></tr>')
-    order = sorted(per, key=lambda k: -(pk(per[k], "total_ms") or 0))
+    # Rows whose figures are suppressed sort LAST. Ordering them by the value
+    # they are hiding leaked it: a blanked row sitting between 23,376 and 16,228
+    # tells the reader its total is in that range.
+    order = sorted(per, key=lambda k: (lat_incoherent(pk(per[k], "total_ms"),
+                                                      pk(per[k], "queue_ms"),
+                                                      pk(per[k], "local_ms")),
+                                       -(pk(per[k], "total_ms") or 0)))
     shown, usable = 0, []
     for rq in order:
         rs = per[rq]
@@ -991,6 +1078,9 @@ def sec_topics(w):
     per = {}
     for r in w.top:
         per.setdefault(r["topic"], []).append(r)
+    h.append(f'<p class="muted">Covers the {len(per)} topic(s) for which the JMX exporter returned a '
+             'per-topic series in this window — not every topic on the cluster. A topic with no traffic '
+             'may be absent here entirely, so this is not a topic inventory.</p>')
     h.append('<div class="tbl-wrap"><table><tr><th>Topic</th><th class="num">MB/s in pk</th>'
              '<th class="num">MB/s in avg</th><th class="num">MB/s out pk</th>'
              '<th class="num">msg/s pk</th><th class="num">share of ingress</th></tr>')
@@ -1065,14 +1155,28 @@ def sec_infra(w):
                      'longer survives a single node failure. Pod anti-affinity on the broker node pool fixes '
                      'this.</div>')
         elif bynode:
-            h.append(f'<div class="verdict good"><b>Each broker sits on its own node</b> '
-                     f'({len(bynode)} nodes), so a single node failure costs exactly one replica.</div>')
+            # The old wording ignored the controllers, which sit on the very same
+            # nodes — so a node loss costs a broker AND a third of the KRaft
+            # quorum, and for any single-replica partition it costs the data.
+            cnodes = {r.get("node") for r in last.values() if r.get("role") == "controller"}
+            shared = sorted(n for n in cnodes if n in bynode)
+            extra = ""
+            if shared:
+                extra = (f' Each of those nodes also hosts a KRaft controller '
+                         f'({len(shared)} of {len(cnodes)}), so losing one node costs a broker '
+                         f'<i>and</i> a controller from the quorum.')
+            if getattr(w, "max_atminisr", None):
+                extra += (' Partitions flagged at min ISR in section 1 have no spare replica, so for '
+                          'those a node loss costs availability, not just redundancy.')
+            h.append(f'<div class="verdict {"warn" if extra else "good"}">'
+                     f'<b>Each broker sits on its own node</b> ({len(bynode)} nodes), so a single node '
+                     f'failure costs one broker replica.{extra}</div>')
     if w.dsk:
         per = {}
         for r in w.dsk:
             per.setdefault(r["pvc"], []).append(r)
         h.append('<h3>Storage</h3>')
-        h.append('<div class="tbl-wrap"><table><tr><th>PVC</th><th>Broker</th>'
+        h.append('<div class="tbl-wrap"><table><tr><th>PVC</th><th>Pod</th>'
                  '<th class="num">Used GB</th><th class="num">Size GB</th>'
                  '<th class="num">Used %</th><th class="num">Grew GB</th><th>Reading</th></tr>')
         for v in sorted(per, key=lambda k: -(pk(per[k], "used_pct") or 0)):
@@ -1083,13 +1187,22 @@ def sec_infra(w):
             txt = ("critical — brokers shut down when the log dir fills" if cls == "bad"
                    else "watch — retention or a bigger PVC needed" if cls == "warn" else "comfortable")
             h.append(f'<tr><td class="mono">{esc(v)}</td><td class="mono">{esc(rs[-1].get("pod","–"))}</td>'
-                     f'<td class="num">{f1(u)}</td><td class="num">{f1(c)}</td>'
+                     f'<td class="num">{fv(u)}</td><td class="num">{f1(c)}</td>'
                      f'<td class="num"><span class="pill {cls}">{f1(p,"%")}</span></td>'
                      f'<td class="num">{f1(grew,"",2)}</td><td class="muted">{txt}</td></tr>')
         h.append("</table></div>")
-        h.append('<p class="muted">"Grew GB" is the increase over this window only. Extrapolate it against '
-                 'free space to find how long a sustained run of this shape can last before retention has '
-                 'to be tightened.</p>')
+        _grew = max((F(rs[-1].get("used_gb"), 0) or 0) - (F(rs[0].get("used_gb"), 0) or 0)
+                    for rs in per.values())
+        if getattr(w, "no_load", False) or _grew <= 0.02:
+            # Extrapolating ~0 growth gives an infinite runway, which contradicts
+            # the summary's own "cannot be used to size anything".
+            h.append('<p class="muted">"Grew GB" is the increase over this window only. It is '
+                     'effectively zero here, which reflects an idle window rather than spare capacity — '
+                     '<b>do not extrapolate a retention runway from it</b>. Re-measure under real load.</p>')
+        else:
+            h.append('<p class="muted">"Grew GB" is the increase over this window only. Extrapolate it '
+                     'against free space to find how long a sustained run of this shape can last before '
+                     'retention has to be tightened.</p>')
     return "".join(h)
 
 
@@ -1110,43 +1223,45 @@ def sec_raw(w):
                      f'<td class="num">{n0(r.get("active_controllers"))}</td>'
                      f'<td class="num">{n0(r.get("offline_partitions"))}</td>'
                      f'<td class="num">{n0(r.get("under_replicated"))}</td>'
-                     f'<td class="num">{f1(r.get("bytes_in_mb_s"),"",2)}</td>'
-                     f'<td class="num">{f1(r.get("bytes_out_mb_s"),"",2)}</td>'
-                     f'<td class="num">{n0(r.get("messages_in_s"))}</td></tr>')
+                     f'<td class="num">{esc(r.get("bytes_in_mb_s") or "–")}</td>'
+                     f'<td class="num">{esc(r.get("bytes_out_mb_s") or "–")}</td>'
+                     f'<td class="num">{esc(r.get("messages_in_s") or "–")}</td></tr>')
         h.append(f'<tr class="tot"><td>PEAK <span class="muted">({len(w.clu)} samples)</span></td>'
                  f'<td class="num">{n0(w.dur)}</td><td class="num"></td>'
                  f'<td class="num">{n0(w.max_off)}</td><td class="num">{n0(w.max_urp)}</td>'
                  f'<td class="num">{f1(w.pk_in,"",2)}</td><td class="num">{f1(w.pk_out,"",2)}</td>'
                  f'<td class="num">{n0(w.pk_msg)}</td></tr>')
-        h.append('</table></div><p class="muted">The TOTAL row shows the peak of each column, not a sum — '
+        h.append('</table></div><p class="muted">The PEAK row shows the peak of each column, not a sum — '
                  'these are rates and counts, not accumulations.</p></details>')
-    for name, rows, cols in (("broker", w.brk, ["pod", "bytes_in_mb_s", "bytes_out_mb_s",
-                                                "handler_idle_pct", "request_queue", "purgatory",
-                                                "under_replicated", "leaders"]),
-                             ("latency", w.lat, ["request", "total_ms", "queue_ms", "local_ms", "req_per_s"]),
-                             ("consumer lag", w.lag, ["group", "topic", "lag", "members"]),
-                             ("health (CLI)", w.hlt, ["check", "value", "detail"])):
+    # EVERY column, and the value EXACTLY as the CSV holds it.
+    #
+    # This section promises the reader an unfiltered copy of the capture, and it
+    # was not delivering one: the broker table showed 10 of 18 columns, so
+    # network_idle_pct and at_min_isr — the two the analytical sections suppress
+    # or derive a FAIL from — appeared nowhere in the file at all. It also
+    # reformatted numbers, turning 0.046 into 0.05 and 340.5 into 340. A section
+    # whose whole purpose is provenance has to be verbatim.
+    for name, rows in (("broker", w.brk), ("latency", w.lat), ("topic", w.top),
+                       ("JVM", w.jvm), ("pod", w.pod), ("disk", w.dsk),
+                       ("consumer lag", w.lag), ("health (CLI)", w.hlt)):
         if not rows:
             continue
-        h.append(f'<details><summary>{name} — {len(rows)} rows</summary><div class="tbl-wrap"><table>'
+        cols = [c for c in rows[0].keys() if c not in ("ts_ist", "elapsed_s") and c is not None]
+        h.append(f'<details><summary>{name} — {len(rows)} rows, {len(cols) + 2} columns'
+                 '</summary><div class="tbl-wrap"><table>'
                  '<tr><th>Time</th><th class="num">Elapsed</th>'
-                 + "".join(f'<th class="num">{c}</th>' for c in cols) + "</tr>")
+                 + "".join(f'<th class="num">{esc(c)}</th>' for c in cols) + "</tr>")
         for r in rows[:400]:
             cells = ""
             for c in cols:
-                v = r.get(c, "")
-                if F(v) is not None:
-                    cells += f'<td class="num">{f1(v,"",2) if "." in str(v) else n0(v)}</td>'
-                elif str(v).strip() == "":
-                    # a metric the exporter never published — say so, don't
-                    # leave a blank cell that reads as a broken table
-                    cells += '<td class="num muted">–</td>'
-                else:
-                    cells += f'<td class="num">{esc(v)}</td>'
+                v = "" if r.get(c) is None else str(r.get(c))
+                cells += (f'<td class="num">{esc(v)}</td>' if v.strip()
+                          else '<td class="num muted">–</td>')
             h.append(f'<tr><td class="mono">{short_ts(r.get("ts_ist",""))}</td>'
-                     f'<td class="num">{n0(r.get("elapsed_s"))}</td>{cells}</tr>')
+                     f'<td class="num">{esc(r.get("elapsed_s") or "")}</td>{cells}</tr>')
         if len(rows) > 400:
-            h.append(f'<tr><td colspan="{len(cols)+2}" class="muted">… {len(rows)-400} further rows in the CSV</td></tr>')
+            h.append(f'<tr><td colspan="{len(cols)+2}" class="muted">… {len(rows)-400} further rows '
+                     'in the CSV</td></tr>')
         h.append("</table></div></details>")
     return "".join(h)
 
@@ -1176,7 +1291,7 @@ def verdict(w):
         bits.append(f"Peak ingress <b>{fv(w.pk_in)} MB/s</b> ({n0(w.pk_msg)} msg/s), egress "
                     f"{fv(w.pk_out)} MB/s, across {len(w.brokers)} broker(s).")
     if getattr(w, "idle_frozen", False) and w.min_idle is not None:
-        bits.append(f"The handler-idle series read a flat {f1(w.min_idle)}% for the whole window, "
+        bits.append(f"Handler idle never moved all window (worst broker {f1(w.min_idle)}%), "
                     "which is a since-start average rather than a measurement of this window — "
                     "<b>broker saturation is therefore unknown</b>, not good.")
         if cls == "good":
@@ -1344,7 +1459,7 @@ def main():
             continue
         wins.append(w)
         print(f"  [window] {t}: {w.samples} samples, {len(w.brokers)} brokers, "
-              f"peak in {f1(w.pk_in)} MB/s")
+              f"peak in {fv(w.pk_in)} MB/s")
     if not wins:
         print("No usable window.")
         raise SystemExit(2)

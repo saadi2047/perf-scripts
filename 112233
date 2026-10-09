@@ -2,10 +2,10 @@
 
 
 ==================================================================================
-   PERF-KAFKA — 2026-10-09 16:34:05 IST    cycle 10s set / 30s actual    ns=perf-kafka    tag=1630
-   elapsed 3m05s    REMAINING 0m00s     ends ~16:34:00 IST   sample 6/6
-   [########################################] 100%
-   window start 2026-10-09 16:31:00 IST
+   PERF-KAFKA — 2026-10-09 17:00:43 IST    cycle 10s set / 28s actual    ns=perf-kafka    tag=1657
+   elapsed 2m51s    REMAINING 0m09s     ends ~17:00:52 IST   sample 6/7
+   [######################################..] 95%
+   window start 2026-10-09 16:57:52 IST
 ==================================================================================
   [1] CLUSTER HEALTH
   ----------------------------------------------------------------------------------
@@ -13,29 +13,29 @@
       offline partitions         not published   (metric absent)
       under-replicated                      0   OK all replicas in sync
       unclean elections/s        not published   (metric absent)
-      partitions / leaders                  8 / 163
-      throughput                         0.08 MB/s in   0.00 MB/s out   650 msg/s
+      partitions / leaders                473 / 163
+      throughput                         0.05 MB/s in   0.00 MB/s out   350 msg/s
 
   [2] BROKERS   (idle% is the saturation signal: <30% = request handlers starved)
   ----------------------------------------------------------------------------------
   BROKER                        MB/s in MB/s out    msg/s hnd idle net idle  reqQ   purg  URP  part  lead
   -------------------------------------------------------------------------------------------------------
-  perf-kafka-cluster-broker-0      0.02     0.00      180    98.9%    23.8%     0  29134    0     2    53
-  perf-kafka-cluster-broker-1      0.00     0.00        0    99.8%    24.0%     0   4483    0     2    55
-  perf-kafka-cluster-broker-2      0.06     0.00      470    92.4%    23.4%     0  28027    0     4    55
+  perf-kafka-cluster-broker-0      0.01     0.00       90    98.9%    23.8%     0  37614    0   157    53
+  perf-kafka-cluster-broker-1      0.00     0.00        0    99.8%    24.0%     0   7786    0   157    55
+  perf-kafka-cluster-broker-2      0.04     0.00      260    92.4%    23.2%     0  15094    0   159    55
       leader balance: max/min 1.04x (even)
 
   [3] REQUEST LATENCY  (p99 ms, by request type)
   ----------------------------------------------------------------------------------
   REQUEST                   total ms  queue ms  local ms     req/s
   JoinGroup                  43287.0       5.0       6.0         0
-  Vote                       28972.6       0.0       0.0         0
+  Vote                       28972.4       0.0       0.0         0
   EndQuorumEpoch             23376.0       0.0       0.0         0
-  DescribeLogDirs            16965.8   16901.5   16965.5         0
-  ListOffsets                13666.3   13568.6       1.0         0
-  Metadata                    9501.8    9501.8       0.0         0
+  DescribeLogDirs            16963.6   16901.2   16963.3         0
+  Metadata                   16228.4   16227.7       0.0         0
+  BrokerHeartbeat            13978.4       0.0       0.0         0
+  ListOffsets                13658.0       4.0       1.0         0
   DescribeClientQuotas        9008.8    9008.8       0.0         0
-  DescribeCluster             8058.6    8058.0       0.0         0
       NOTE: no request type had a measurable rate — every row above is
       background chatter (Cruise Control, the operator, KRaft quorum).
       These are not load-test latencies and imply nothing about capacity.
@@ -43,8 +43,8 @@
   [4] TOP TOPICS BY INGRESS
   ----------------------------------------------------------------------------------
   TOPIC                                        MB/s in  MB/s out     msg/s
-  __consumer_offsets                             0.042     0.000       304
-  strimzi.cruisecontrol.metrics                  0.000     0.000         9
+  __consumer_offsets                             0.044     0.000       329
+  strimzi.cruisecontrol.metrics                  0.000     0.000        19
   strimzi.cruisecontro~rtitionmetricsamples      0.000     0.000         2
   strimzi.cruisecontro~modeltrainingsamples      0.000     0.000         0
   transaction_push_verification_topic            0.000     0.000         0
@@ -52,52 +52,52 @@
   [5] PODS   (placement, resources, JVM)
   ----------------------------------------------------------------------------------
   POD                           ROLE        NODE              RDY  RST     CPU   MEM Mi  heap Mi   GC/s
-  perf-kafka-cluster-broker-0   broker      kafbroker1        1/1    0    790m     8692     5199      -
-  perf-kafka-cluster-broker-1   broker      kafbroker3        1/1    0    132m     8388     4092      -
-  perf-kafka-cluster-broker-2   broker      kafbroker2        1/1    0    510m    12634     5357      -
-  perf-kafka-clu~r-controller-3 controller  kafbroker3        1/1    0     95m     3229     2124      -
-  perf-kafka-clu~r-controller-4 controller  kafbroker1        1/1    0     83m     3243     1650      -
-  perf-kafka-clu~r-controller-5 controller  kafbroker2        1/1    0     35m     4229     1626      -
-  perf-kafka-clu~889b47d8-kkq8v cruise-ctl  worker4           1/1    3     14m     1638        -      -
-  perf-kafka-clu~4578cbfd-r5kg8 entity-op   worker5           2/2    0      9m      949      107      -
+  perf-kafka-cluster-broker-0   broker      kafbroker1        1/1    0    680m     8696     4622      -
+  perf-kafka-cluster-broker-1   broker      kafbroker3        1/1    0    121m     8390     2219      -
+  perf-kafka-cluster-broker-2   broker      kafbroker2        1/1    0    464m    12636     3620      -
+  perf-kafka-clu~r-controller-3 controller  kafbroker3        1/1    0     25m     3229     1679      -
+  perf-kafka-clu~r-controller-4 controller  kafbroker1        1/1    0     68m     3243     1253      -
+  perf-kafka-clu~r-controller-5 controller  kafbroker2        1/1    0    120m     4229     2376      -
+  perf-kafka-clu~889b47d8-kkq8v cruise-ctl  worker4           1/1    3     23m     1638        -      -
+  perf-kafka-clu~4578cbfd-r5kg8 entity-op   worker5           2/2    0     11m      949       91      -
 
   [6] STORAGE
   ----------------------------------------------------------------------------------
   PVC                                            used GB   size GB   used %
-  data-0-perf-kafka-cluster-broker-1                 4.8     107.4     4.5%
+  data-0-perf-kafka-cluster-broker-1                 5.0     107.4     4.6%
   data-0-perf-kafka-cluster-broker-0                 4.5     107.4     4.2%
-  data-1-perf-kafka-cluster-broker-2                 4.2     107.4     4.0%
-  data-0-perf-kafka-cluster-broker-2                 3.1     107.4     2.9%
-  data-1-perf-kafka-cluster-broker-0                 3.1     107.4     2.9%
-  data-1-perf-kafka-cluster-broker-1                 1.7     107.4     1.6%
+  data-1-perf-kafka-cluster-broker-2                 4.4     107.4     4.1%
+  data-0-perf-kafka-cluster-broker-2                 3.2     107.4     3.0%
+  data-1-perf-kafka-cluster-broker-0                 3.2     107.4     2.9%
+  data-1-perf-kafka-cluster-broker-1                 1.8     107.4     1.7%
   data-0-perf-kafka-cluster-controller-5             0.0     107.4     0.0%
   data-0-perf-kafka-cluster-controller-4             0.0     107.4     0.0%
   data-0-perf-kafka-cluster-controller-3             0.0     107.4     0.0%
 ==================================================================================
-   0m00s remaining (ends ~16:34:00 IST)   |   Ctrl-C to stop early and still get the report
-   CSVs: /home/osuser/saadi/M/Muzzammil/perf-kafka/kafka-test-20261009_163035/kafka_*_1630.csv
+   0m09s remaining (ends ~17:00:52 IST)   |   Ctrl-C to stop early and still get the report
+   CSVs: /home/osuser/saadi/M/Muzzammil/perf-kafka/kafka-test-20261009_165729/kafka_*_1657.csv
 [*] requested 180s reached — no further samples will start.
 
 ==================================================================================
-   PERF-KAFKA WINDOW SUMMARY   (tag: 1630, namespace: perf-kafka)
+   PERF-KAFKA WINDOW SUMMARY   (tag: 1657, namespace: perf-kafka)
 ==================================================================================
-   START / END (IST) : 2026-10-09 16:31:00  ->  2026-10-09 16:34:15
-   DURATION          : 195s (3.2 min) over 6 samples   (requested 180s; the final sample was allowed to finish)
+   START / END (IST) : 2026-10-09 16:57:52  ->  2026-10-09 17:00:53
+   DURATION          : 181s (3.0 min) over 6 samples   (requested 180s; the final sample was allowed to finish)
    BROKERS           : 3
-   PEAK THROUGHPUT   : in 0.09 MB/s   out 0.00 MB/s   701 msg/s
+   PEAK THROUGHPUT   : in 0.05 MB/s   out 0.00 MB/s   354 msg/s
    WORST HANDLER IDLE: 92.4%   (under 30% = brokers saturated)
    MAX UNDER-REPL    : 0   (must return to 0)
    MAX CONSUMER LAG  : 0
 ==================================================================================
-   CSVs in /home/osuser/saadi/M/Muzzammil/perf-kafka/kafka-test-20261009_163035  (tag 1630)
+   CSVs in /home/osuser/saadi/M/Muzzammil/perf-kafka/kafka-test-20261009_165729  (tag 1657)
 
 [*] building the HTML report...
-  [window] 1630: 6 samples, 3 brokers, peak in 0.1 MB/s
-[kafka-report] wrote /home/osuser/saadi/M/Muzzammil/perf-kafka/kafka-test-20261009_163035/KAFKA_Report_20261009_163415.html
-[OK] REPORT: /home/osuser/saadi/M/Muzzammil/perf-kafka/kafka-test-20261009_163035/KAFKA_Report_20261009_163415.html
+  [window] 1657: 6 samples, 3 brokers, peak in 0.0 MB/s
+[kafka-report] wrote /home/osuser/saadi/M/Muzzammil/perf-kafka/kafka-test-20261009_165729/KAFKA_Report_20261009_170053.html
+[OK] REPORT: /home/osuser/saadi/M/Muzzammil/perf-kafka/kafka-test-20261009_165729/KAFKA_Report_20261009_170053.html
 [osuser@bastion perf-kafka]$
 
-[osuser@bastion perf-kafka]$ oc get po
+[osuser@bastion perf-kafka]$ oc get pod
 NAME                                                    READY   STATUS    RESTARTS      AGE
 perf-kafka-cluster-broker-0                             1/1     Running   0             22d
 perf-kafka-cluster-broker-1                             1/1     Running   0             22d
@@ -105,14 +105,12 @@ perf-kafka-cluster-broker-2                             1/1     Running   0     
 perf-kafka-cluster-controller-3                         1/1     Running   0             22d
 perf-kafka-cluster-controller-4                         1/1     Running   0             22d
 perf-kafka-cluster-controller-5                         1/1     Running   0             22d
-perf-kafka-cluster-cruise-control-7b889b47d8-kkq8v      1/1     Running   3 (40h ago)   22d
+perf-kafka-cluster-cruise-control-7b889b47d8-kkq8v      1/1     Running   3 (41h ago)   22d
 perf-kafka-cluster-entity-operator-f4578cbfd-r5kg8      2/2     Running   0             22d
 perf-kafka-console-console-deployment-6c7cb6cdb-hbg6l   2/2     Running   0             22d
 [osuser@bastion perf-kafka]$ oc rsh perf-kafka-cluster-broker-0
-cdDefaulted container "kafka" out of: kafka, dynatrace-operator (init)
-cdcdsh-5.1$ cd bin
-sh-5.1$ pwd
-/opt/kafka/bin
+Defaulted container "kafka" out of: kafka, dynatrace-operator (init)
+sh-5.1$ cd bin
 sh-5.1$ ./kafka-topics.sh --bootstrap-server localhost:9092 --describe \
   --topic transaction_push_verification_topic
 Topic: transaction_push_verification_topic      TopicId: aI6DKCXKSQmLCHht4-X8Gw PartitionCount: 4       ReplicationFactor: 3    Configs: compression.type=producer,min.insync.replicas=2,cleanup.policy=delete,segment.bytes=1073741824
@@ -120,5 +118,247 @@ Topic: transaction_push_verification_topic      TopicId: aI6DKCXKSQmLCHht4-X8Gw 
         Topic: transaction_push_verification_topic      Partition: 1    Leader: 0       Replicas: 0,1,2 Isr: 0,1,2      Elr:    LastKnownElr:
         Topic: transaction_push_verification_topic      Partition: 2    Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
         Topic: transaction_push_verification_topic      Partition: 3    Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+sh-5.1$ ./kafka-topics.sh --bootstrap-server localhost:9092 --describe   --topic all-topics
+Error while executing topic command : Topic 'Optional[all-topics]' does not exist as expected
+[2026-10-09 11:32:14,967] ERROR java.lang.IllegalArgumentException: Topic 'Optional[all-topics]' does not exist as expected
+        at org.apache.kafka.tools.TopicCommand.ensureTopicExists(TopicCommand.java:218)
+        at org.apache.kafka.tools.TopicCommand.access$700(TopicCommand.java:81)
+        at org.apache.kafka.tools.TopicCommand$TopicService.describeTopic(TopicCommand.java:578)
+        at org.apache.kafka.tools.TopicCommand.execute(TopicCommand.java:111)
+        at org.apache.kafka.tools.TopicCommand.mainNoExit(TopicCommand.java:90)
+        at org.apache.kafka.tools.TopicCommand.main(TopicCommand.java:85)
+ (org.apache.kafka.tools.TopicCommand)
+sh-5.1$ ./kafka-topics.sh --bootstrap-server localhost:9092 --describe   --topic all-topic
+Error while executing topic command : Topic 'Optional[all-topic]' does not exist as expected
+[2026-10-09 11:32:22,849] ERROR java.lang.IllegalArgumentException: Topic 'Optional[all-topic]' does not exist as expected
+        at org.apache.kafka.tools.TopicCommand.ensureTopicExists(TopicCommand.java:218)
+        at org.apache.kafka.tools.TopicCommand.access$700(TopicCommand.java:81)
+        at org.apache.kafka.tools.TopicCommand$TopicService.describeTopic(TopicCommand.java:578)
+        at org.apache.kafka.tools.TopicCommand.execute(TopicCommand.java:111)
+        at org.apache.kafka.tools.TopicCommand.mainNoExit(TopicCommand.java:90)
+        at org.apache.kafka.tools.TopicCommand.main(TopicCommand.java:85)
+ (org.apache.kafka.tools.TopicCommand)
+^[[Ash-5.1$ ./kafka-topics.sh --bootstrap-server localhost:9092 --describe  all-topics
+Topic: transaction_push_verification_topic      TopicId: aI6DKCXKSQmLCHht4-X8Gw PartitionCount: 4       ReplicationFactor: 3    Configs: compression.type=producer,min.insync.replicas=2,cleanup.policy=delete,segment.bytes=1073741824
+        Topic: transaction_push_verification_topic      Partition: 0    Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: transaction_push_verification_topic      Partition: 1    Leader: 0       Replicas: 0,1,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: transaction_push_verification_topic      Partition: 2    Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: transaction_push_verification_topic      Partition: 3    Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+Topic: ops_refund_adjust_detail_topic   TopicId: rPi4NPRNTyGy9CQ0h6B-xQ PartitionCount: 1       ReplicationFactor: 3    Configs: compression.type=producer,min.insync.replicas=2,cleanup.policy=delete,segment.bytes=1073741824
+        Topic: ops_refund_adjust_detail_topic   Partition: 0    Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+Topic: strimzi.cruisecontrol.modeltrainingsamples       TopicId: o4MEQ5-jS4OA-XxmopgmHg PartitionCount: 32      ReplicationFactor: 3    Configs: compression.type=producer,min.insync.replicas=2,cleanup.policy=delete,segment.bytes=1073741824,retention.ms=12000000
+        Topic: strimzi.cruisecontrol.modeltrainingsamples       Partition: 0    Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.modeltrainingsamples       Partition: 1    Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.modeltrainingsamples       Partition: 2    Leader: 0       Replicas: 0,1,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.modeltrainingsamples       Partition: 3    Leader: 2       Replicas: 2,1,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.modeltrainingsamples       Partition: 4    Leader: 1       Replicas: 1,0,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.modeltrainingsamples       Partition: 5    Leader: 0       Replicas: 0,2,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.modeltrainingsamples       Partition: 6    Leader: 1       Replicas: 1,0,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.modeltrainingsamples       Partition: 7    Leader: 0       Replicas: 0,2,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.modeltrainingsamples       Partition: 8    Leader: 2       Replicas: 2,1,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.modeltrainingsamples       Partition: 9    Leader: 1       Replicas: 1,0,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.modeltrainingsamples       Partition: 10   Leader: 0       Replicas: 0,2,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.modeltrainingsamples       Partition: 11   Leader: 2       Replicas: 2,1,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.modeltrainingsamples       Partition: 12   Leader: 1       Replicas: 1,0,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.modeltrainingsamples       Partition: 13   Leader: 0       Replicas: 0,2,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.modeltrainingsamples       Partition: 14   Leader: 2       Replicas: 2,1,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.modeltrainingsamples       Partition: 15   Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.modeltrainingsamples       Partition: 16   Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.modeltrainingsamples       Partition: 17   Leader: 0       Replicas: 0,1,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.modeltrainingsamples       Partition: 18   Leader: 0       Replicas: 0,2,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.modeltrainingsamples       Partition: 19   Leader: 2       Replicas: 2,1,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.modeltrainingsamples       Partition: 20   Leader: 1       Replicas: 1,0,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.modeltrainingsamples       Partition: 21   Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.modeltrainingsamples       Partition: 22   Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.modeltrainingsamples       Partition: 23   Leader: 0       Replicas: 0,1,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.modeltrainingsamples       Partition: 24   Leader: 2       Replicas: 2,1,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.modeltrainingsamples       Partition: 25   Leader: 1       Replicas: 1,0,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.modeltrainingsamples       Partition: 26   Leader: 0       Replicas: 0,2,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.modeltrainingsamples       Partition: 27   Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.modeltrainingsamples       Partition: 28   Leader: 0       Replicas: 0,1,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.modeltrainingsamples       Partition: 29   Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.modeltrainingsamples       Partition: 30   Leader: 1       Replicas: 1,0,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.modeltrainingsamples       Partition: 31   Leader: 0       Replicas: 0,2,1 Isr: 0,1,2      Elr:    LastKnownElr:
+Topic: strimzi.cruisecontrol.metrics    TopicId: Dp51i9KySVi-sfHCd5aOjQ PartitionCount: 1       ReplicationFactor: 3    Configs: compression.type=producer,min.insync.replicas=1,cleanup.policy=delete,segment.bytes=1073741824,retention.ms=18000000
+        Topic: strimzi.cruisecontrol.metrics    Partition: 0    Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+Topic: merchant_email_notification_topic        TopicId: p7pSsp37Rv2KbKA9XjtH1Q PartitionCount: 4       ReplicationFactor: 3    Configs: compression.type=producer,min.insync.replicas=2,cleanup.policy=delete,segment.bytes=1073741824
+        Topic: merchant_email_notification_topic        Partition: 0    Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: merchant_email_notification_topic        Partition: 1    Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: merchant_email_notification_topic        Partition: 2    Leader: 0       Replicas: 0,1,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: merchant_email_notification_topic        Partition: 3    Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+Topic: transaction_email_notification_topic     TopicId: V8cXU-wHRkyMbOC72pimpw PartitionCount: 4       ReplicationFactor: 3    Configs: compression.type=producer,min.insync.replicas=2,cleanup.policy=delete,segment.bytes=1073741824
+        Topic: transaction_email_notification_topic     Partition: 0    Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: transaction_email_notification_topic     Partition: 1    Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: transaction_email_notification_topic     Partition: 2    Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: transaction_email_notification_topic     Partition: 3    Leader: 0       Replicas: 0,1,2 Isr: 0,1,2      Elr:    LastKnownElr:
+Topic: ops_recon_fail_ack_topic TopicId: t1a6BuAOSKmCRoLZAV1BAA PartitionCount: 4       ReplicationFactor: 1    Configs: compression.type=producer,min.insync.replicas=2,cleanup.policy=delete,segment.bytes=1073741824
+        Topic: ops_recon_fail_ack_topic Partition: 0    Leader: 0       Replicas: 0     Isr: 0  Elr:    LastKnownElr:
+        Topic: ops_recon_fail_ack_topic Partition: 1    Leader: 1       Replicas: 1     Isr: 1  Elr:    LastKnownElr:
+        Topic: ops_recon_fail_ack_topic Partition: 2    Leader: 2       Replicas: 2     Isr: 2  Elr:    LastKnownElr:
+        Topic: ops_recon_fail_ack_topic Partition: 3    Leader: 2       Replicas: 2     Isr: 2  Elr:    LastKnownElr:
+Topic: ops_recon_record_unmatched_topic TopicId: HurAdMy-SyCZ9As4cqxFmg PartitionCount: 1       ReplicationFactor: 3    Configs: compression.type=producer,min.insync.replicas=2,cleanup.policy=delete,segment.bytes=1073741824
+        Topic: ops_recon_record_unmatched_topic Partition: 0    Leader: 0       Replicas: 0,1,2 Isr: 0,1,2      Elr:    LastKnownElr:
+Topic: process_bookingDetails_topic     TopicId: 7TkS0QN-Tk-0qXpSVkltPw PartitionCount: 4       ReplicationFactor: 3    Configs: compression.type=producer,min.insync.replicas=2,cleanup.policy=delete,segment.bytes=1073741824
+        Topic: process_bookingDetails_topic     Partition: 0    Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: process_bookingDetails_topic     Partition: 1    Leader: 0       Replicas: 0,1,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: process_bookingDetails_topic     Partition: 2    Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: process_bookingDetails_topic     Partition: 3    Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+Topic: ops_recon_record_matched_topic   TopicId: U93SEzD2SfmyacG8kRrIjg PartitionCount: 1       ReplicationFactor: 3    Configs: compression.type=producer,min.insync.replicas=2,cleanup.policy=delete,segment.bytes=1073741824
+        Topic: ops_recon_record_matched_topic   Partition: 0    Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+Topic: report_sms_notification_topic    TopicId: IE4KztR8QQmW1lunfdURHA PartitionCount: 1       ReplicationFactor: 3    Configs: compression.type=producer,min.insync.replicas=2,cleanup.policy=delete,segment.bytes=1073741824
+        Topic: report_sms_notification_topic    Partition: 0    Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+Topic: merchant_sms_notification_topic  TopicId: lUTLfaY8QsaAEf8tdXIF2g PartitionCount: 4       ReplicationFactor: 3    Configs: compression.type=producer,min.insync.replicas=2,cleanup.policy=delete,segment.bytes=1073741824
+        Topic: merchant_sms_notification_topic  Partition: 0    Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: merchant_sms_notification_topic  Partition: 1    Leader: 0       Replicas: 0,1,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: merchant_sms_notification_topic  Partition: 2    Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: merchant_sms_notification_topic  Partition: 3    Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+Topic: ops_refund_adjust_confirmation_topic     TopicId: cp8V4APqTIe1XHTg53b6mw PartitionCount: 4       ReplicationFactor: 1    Configs: compression.type=producer,min.insync.replicas=2,cleanup.policy=delete,segment.bytes=1073741824
+        Topic: ops_refund_adjust_confirmation_topic     Partition: 0    Leader: 2       Replicas: 2     Isr: 2  Elr:    LastKnownElr:
+        Topic: ops_refund_adjust_confirmation_topic     Partition: 1    Leader: 0       Replicas: 0     Isr: 0  Elr:    LastKnownElr:
+        Topic: ops_refund_adjust_confirmation_topic     Partition: 2    Leader: 1       Replicas: 1     Isr: 1  Elr:    LastKnownElr:
+        Topic: ops_refund_adjust_confirmation_topic     Partition: 3    Leader: 2       Replicas: 2     Isr: 2  Elr:    LastKnownElr:
+Topic: strimzi.cruisecontrol.partitionmetricsamples     TopicId: 6xCoD6TLSGuFp6cbxReWYQ PartitionCount: 32      ReplicationFactor: 3    Configs: compression.type=producer,min.insync.replicas=2,cleanup.policy=delete,segment.bytes=1073741824,retention.ms=3600000
+        Topic: strimzi.cruisecontrol.partitionmetricsamples     Partition: 0    Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.partitionmetricsamples     Partition: 1    Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.partitionmetricsamples     Partition: 2    Leader: 0       Replicas: 0,1,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.partitionmetricsamples     Partition: 3    Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.partitionmetricsamples     Partition: 4    Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.partitionmetricsamples     Partition: 5    Leader: 0       Replicas: 0,1,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.partitionmetricsamples     Partition: 6    Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.partitionmetricsamples     Partition: 7    Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.partitionmetricsamples     Partition: 8    Leader: 0       Replicas: 0,1,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.partitionmetricsamples     Partition: 9    Leader: 0       Replicas: 0,1,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.partitionmetricsamples     Partition: 10   Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.partitionmetricsamples     Partition: 11   Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.partitionmetricsamples     Partition: 12   Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.partitionmetricsamples     Partition: 13   Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.partitionmetricsamples     Partition: 14   Leader: 0       Replicas: 0,1,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.partitionmetricsamples     Partition: 15   Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.partitionmetricsamples     Partition: 16   Leader: 0       Replicas: 0,1,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.partitionmetricsamples     Partition: 17   Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.partitionmetricsamples     Partition: 18   Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.partitionmetricsamples     Partition: 19   Leader: 0       Replicas: 0,1,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.partitionmetricsamples     Partition: 20   Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.partitionmetricsamples     Partition: 21   Leader: 1       Replicas: 1,0,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.partitionmetricsamples     Partition: 22   Leader: 0       Replicas: 0,2,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.partitionmetricsamples     Partition: 23   Leader: 2       Replicas: 2,1,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.partitionmetricsamples     Partition: 24   Leader: 1       Replicas: 1,0,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.partitionmetricsamples     Partition: 25   Leader: 0       Replicas: 0,2,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.partitionmetricsamples     Partition: 26   Leader: 2       Replicas: 2,1,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.partitionmetricsamples     Partition: 27   Leader: 0       Replicas: 0,1,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.partitionmetricsamples     Partition: 28   Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.partitionmetricsamples     Partition: 29   Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.partitionmetricsamples     Partition: 30   Leader: 0       Replicas: 0,1,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: strimzi.cruisecontrol.partitionmetricsamples     Partition: 31   Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+Topic: ops_report_generation_topic      TopicId: QODyCzYFS2y65Mp5dkQ64g PartitionCount: 1       ReplicationFactor: 3    Configs: compression.type=producer,min.insync.replicas=2,cleanup.policy=delete,segment.bytes=1073741824
+        Topic: ops_report_generation_topic      Partition: 0    Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+Topic: recon_update_settlement_status_topic     TopicId: tvMZ8P0PR-C_pdhOcC0V0w PartitionCount: 1       ReplicationFactor: 3    Configs: compression.type=producer,min.insync.replicas=2,cleanup.policy=delete,segment.bytes=1073741824
+        Topic: recon_update_settlement_status_topic     Partition: 0    Leader: 0       Replicas: 0,1,2 Isr: 0,1,2      Elr:    LastKnownElr:
+Topic: transaction_sms_notification_topic       TopicId: BvzHujdsQoq2UQ1UUO5d3w PartitionCount: 4       ReplicationFactor: 3    Configs: compression.type=producer,min.insync.replicas=2,cleanup.policy=delete,segment.bytes=1073741824
+        Topic: transaction_sms_notification_topic       Partition: 0    Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: transaction_sms_notification_topic       Partition: 1    Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: transaction_sms_notification_topic       Partition: 2    Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: transaction_sms_notification_topic       Partition: 3    Leader: 0       Replicas: 0,1,2 Isr: 0,1,2      Elr:    LastKnownElr:
+Topic: process_bulk_refund_topic        TopicId: P_dQ80X1TYqY2_rmUQkBHA PartitionCount: 4       ReplicationFactor: 3    Configs: compression.type=producer,min.insync.replicas=2,cleanup.policy=delete,segment.bytes=1073741824
+        Topic: process_bulk_refund_topic        Partition: 0    Leader: 0       Replicas: 0,1,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: process_bulk_refund_topic        Partition: 1    Leader: 0       Replicas: 0,1,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: process_bulk_refund_topic        Partition: 2    Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: process_bulk_refund_topic        Partition: 3    Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+Topic: merchant_report_topic    TopicId: BxSE7Y8NTsidbb699JCFFw PartitionCount: 4       ReplicationFactor: 3    Configs: compression.type=producer,min.insync.replicas=2,cleanup.policy=delete,segment.bytes=1073741824
+        Topic: merchant_report_topic    Partition: 0    Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: merchant_report_topic    Partition: 1    Leader: 0       Replicas: 0,1,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: merchant_report_topic    Partition: 2    Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: merchant_report_topic    Partition: 3    Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+Topic: __consumer_offsets       TopicId: nLNe5mM0Q52jYosTcFTbrg PartitionCount: 50      ReplicationFactor: 3    Configs: compression.type=producer,min.insync.replicas=2,cleanup.policy=compact,segment.bytes=104857600
+        Topic: __consumer_offsets       Partition: 0    Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 1    Leader: 0       Replicas: 0,1,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 2    Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 3    Leader: 1       Replicas: 1,0,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 4    Leader: 0       Replicas: 0,2,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 5    Leader: 2       Replicas: 2,1,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 6    Leader: 0       Replicas: 0,1,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 7    Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 8    Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 9    Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 10   Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 11   Leader: 0       Replicas: 0,1,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 12   Leader: 0       Replicas: 0,1,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 13   Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 14   Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 15   Leader: 1       Replicas: 1,0,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 16   Leader: 0       Replicas: 0,2,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 17   Leader: 2       Replicas: 2,1,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 18   Leader: 1       Replicas: 1,0,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 19   Leader: 0       Replicas: 0,2,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 20   Leader: 2       Replicas: 2,1,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 21   Leader: 0       Replicas: 0,1,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 22   Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 23   Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 24   Leader: 0       Replicas: 0,2,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 25   Leader: 2       Replicas: 2,1,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 26   Leader: 1       Replicas: 1,0,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 27   Leader: 2       Replicas: 2,1,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 28   Leader: 1       Replicas: 1,0,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 29   Leader: 0       Replicas: 0,2,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 30   Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 31   Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 32   Leader: 0       Replicas: 0,1,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 33   Leader: 1       Replicas: 1,0,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 34   Leader: 0       Replicas: 0,2,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 35   Leader: 2       Replicas: 2,1,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 36   Leader: 0       Replicas: 0,2,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 37   Leader: 2       Replicas: 2,1,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 38   Leader: 1       Replicas: 1,0,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 39   Leader: 1       Replicas: 1,0,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 40   Leader: 0       Replicas: 0,2,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 41   Leader: 2       Replicas: 2,1,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 42   Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 43   Leader: 2       Replicas: 2,0,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 44   Leader: 0       Replicas: 0,1,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 45   Leader: 0       Replicas: 0,2,1 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 46   Leader: 2       Replicas: 2,1,0 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 47   Leader: 1       Replicas: 1,0,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 48   Leader: 0       Replicas: 0,1,2 Isr: 0,1,2      Elr:    LastKnownElr:
+        Topic: __consumer_offsets       Partition: 49   Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+Topic: ops_recon_record_duplicate_topic TopicId: 8bGT6nBaR4-aNoEKSgsWiQ PartitionCount: 1       ReplicationFactor: 3    Configs: compression.type=producer,min.insync.replicas=2,cleanup.policy=delete,segment.bytes=1073741824
+        Topic: ops_recon_record_duplicate_topic Partition: 0    Leader: 1       Replicas: 1,2,0 Isr: 0,1,2      Elr:    LastKnownElr:
+Topic: merchant_report_alert_topic      TopicId: G8A3maxRR_yoX958tsOjqg PartitionCount: 1       ReplicationFactor: 3    Configs: compression.type=producer,min.insync.replicas=2,cleanup.policy=delete,segment.bytes=1073741824
+        Topic: merchant_report_alert_topic      Partition: 0    Leader: 0       Replicas: 0,1,2 Isr: 0,1,2      Elr:    LastKnownElr:
 sh-5.1$
+sh-5.1$ ./kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe  --all-groups
 
+GROUP              TOPIC                             PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID                                                        HOST            CLIENT-ID
+merchant-consumers merchant_sms_notification_topic   1          60134           60134           0               consumer-merchant-consumers-1-792427f6-722e-42bc-8e96-4e767d7362fa /172.16.57.88   consumer-merchant-consumers-1
+merchant-consumers merchant_sms_notification_topic   0          54387           54387           0               consumer-merchant-consumers-1-792427f6-722e-42bc-8e96-4e767d7362fa /172.16.57.88   consumer-merchant-consumers-1
+merchant-consumers merchant_email_notification_topic 1          54993           54993           0               consumer-merchant-consumers-2-52f38005-7f05-40cd-944a-addd55db75fd /172.16.57.88   consumer-merchant-consumers-2
+merchant-consumers merchant_email_notification_topic 0          59553           59553           0               consumer-merchant-consumers-2-52f38005-7f05-40cd-944a-addd55db75fd /172.16.57.88   consumer-merchant-consumers-2
+merchant-consumers merchant_email_notification_topic 2          67708           67708           0               consumer-merchant-consumers-2-ecc82911-ecfa-4008-9eba-d4099b3e67e3 /172.16.62.232  consumer-merchant-consumers-2
+merchant-consumers merchant_email_notification_topic 3          57149           57149           0               consumer-merchant-consumers-2-ecc82911-ecfa-4008-9eba-d4099b3e67e3 /172.16.62.232  consumer-merchant-consumers-2
+merchant-consumers merchant_sms_notification_topic   3          69326           69326           0               consumer-merchant-consumers-1-ffc9ade6-e377-4954-a631-deec079170c1 /172.16.62.232  consumer-merchant-consumers-1
+merchant-consumers merchant_sms_notification_topic   2          55071           55071           0               consumer-merchant-consumers-1-ffc9ade6-e377-4954-a631-deec079170c1 /172.16.62.232  consumer-merchant-consumers-1
+merchant-consumers merchant_report_alert_topic       0          27757           27757           0               consumer-merchant-consumers-3-3945fbe7-3758-4d38-b5ba-a50d1f5b5bf7 /172.16.57.88   consumer-merchant-consumers-3
+GROUP                 TOPIC                                PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID                                                           HOST            CLIENT-ID
+transaction-consumers transaction_push_verification_topic  1          11101907        11101907        0               consumer-transaction-consumers-4-755680a7-c31b-49d2-b9a7-60bb9fb0e35e /172.16.59.203  consumer-transaction-consumers-4
+transaction-consumers transaction_push_verification_topic  0          11161853        11161853        0               consumer-transaction-consumers-4-755680a7-c31b-49d2-b9a7-60bb9fb0e35e /172.16.59.203  consumer-transaction-consumers-4
+transaction-consumers process_bulk_refund_topic            0          5               5               0               consumer-transaction-consumers-8-088a8f35-56ac-4fdf-9d2e-a4d360d38ed3 /172.16.27.72   consumer-transaction-consumers-8
+transaction-consumers ops_recon_record_unmatched_topic     0          0               0               0               consumer-transaction-consumers-7-11f37ea8-546f-4dce-aafc-bff929e74cd0 /172.16.17.170  consumer-transaction-consumers-7
+transaction-consumers process_bookingDetails_topic         2          11488           11488           0               consumer-transaction-consumers-2-3a60f658-5bc1-4c5e-bcae-c1c7ab680329 /172.16.59.203  consumer-transaction-consumers-2
+transaction-consumers transaction_sms_notification_topic   0          0               0               0               consumer-transaction-consumers-3-2dba0be8-2c1a-4a8d-be2c-7dd50ab5df22 /172.16.17.170  consumer-transaction-consumers-3
+transaction-consumers ops_recon_record_matched_topic       0          0               0               0               consumer-transaction-consumers-6-10bb7750-e142-472f-a022-420852955885 /172.16.27.72   consumer-transaction-consumers-6
+transaction-consumers transaction_email_notification_topic 0          0               0               0               consumer-transaction-consumers-9-09c33bda-e231-4ab9-b46b-773b89550e47 /172.16.11.155  consumer-transaction-consumers-9
+transaction-consumers process_bookingDetails_topic         1          11623           11623           0               consumer-transaction-consumers-2-20779e41-7580-4768-a3f8-67ec6662b396 /172.16.59.204  consumer-transaction-consumers-2
+transaction-consumers transaction_email_notification_topic 1          0               0               0               consumer-transaction-consumers-9-0fc435d5-cfce-4895-8258-79fa827380fd /172.16.17.171  consumer-transaction-consumers-9
+transaction-consumers process_bulk_refund_topic            3          3               3               0               consumer-transaction-consumers-8-5ae8aafe-5692-4f65-8b64-178d082e71dd /172.16.60.32   consumer-transaction-consumers-8
+transaction-consumers process_bulk_refund_topic            2          7               7               0               consumer-transaction-consumers-8-2302bd20-a6e5-40eb-a761-fd289243b78a /172.16.11.156  consumer-transaction-consumers-8
+transaction-consumers transaction_email_notification_topic 2          0               0               0               consumer-transaction-consumers-9-11bedf31-599a-468e-8303-640c7fd9ff10 /172.16.19.212  consumer-transaction-consumers-9
+transaction-consumers ops_refund_adjust_detail_topic       0          0               0               0               consumer-transaction-consumers-1-11d2da06-5f2b-48ac-8a5e-bf0467254f73 /172.16.19.212  consumer-transaction-consumers-1
+transaction-consumers process_bulk_refund_topic            1          4               4               0               consumer-transaction-consumers-8-2203d08d-9ffe-498d-991c-2dbca681d110 /172.16.17.171  consumer-transaction-consumers-8
+transaction-consumers transaction_sms_notification_topic   1          0               0               0               consumer-transaction-consumers-3-3eb9301a-9a29-433c-a0d2-ea674d5898f6 /172.16.27.72   consumer-transaction-consumers-3
+transaction-consumers transaction_push_verification_topic  2          11129190        11129190        0               consumer-transaction-consumers-4-ba791165-3c2b-46a6-8fef-a12f2f2e5454 /172.16.60.33   consumer-transaction-consumers-4
+transaction-consumers transaction_sms_notification_topic   3          0               0               0               consumer-transaction-consumers-3-559d6ccf-7b36-47fb-8fc6-be4106011f09 /172.16.60.32   consumer-transaction-consumers-3
+transaction-consumers transaction_push_verification_topic  3          10983459        10983459        0               consumer-transaction-consumers-4-f24cbb25-f69d-435a-8601-0c6c5fec9455 /172.16.27.73   consumer-transaction-consumers-4
+transaction-consumers process_bookingDetails_topic         0          11578           11578           0               consumer-transaction-consumers-2-0100d73c-0016-493e-a95a-91e8e2c11b6d /172.16.27.72   consumer-transaction-consumers-2
+transaction-consumers ops_recon_record_duplicate_topic     0          0               0               0               consumer-transaction-consumers-5-07a65c98-63ff-495a-9d9a-de278c31f1a8 /172.16.11.155  consumer-transaction-consumers-5
+transaction-consumers transaction_sms_notification_topic   2          0               0               0               consumer-transaction-consumers-3-4330a7f0-5326-4e24-9858-193b8f88eae0 /172.16.19.212  consumer-transaction-consumers-3
+transaction-consumers process_bookingDetails_topic         3          11338           11338           0               consumer-transaction-consumers-2-3bbac36d-47e9-4e07-b41e-2e1bc59c84d8 /172.16.17.170  consumer-transaction-consumers-2
+transaction-consumers transaction_email_notification_topic 3          0               0               0               consumer-transaction-consumers-9-164f66b0-d8c9-4576-b3ba-5d53b94c8e6e /172.16.17.170  consumer-transaction-consumers-9sh-5.1$

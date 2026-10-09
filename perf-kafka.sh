@@ -44,7 +44,7 @@ set -u
 # Bump on every change. Printed at startup, by --version and by --check, and
 # written into each run folder, so there is never any doubt about which build
 # produced a given set of CSVs.
-PK_VERSION="2026-10-09.6  (same-broker latency, PVC probe, honest GC + countdown)"
+PK_VERSION="2026-10-09.7  (double-count fix, anchored partition regex, at-min-ISR)"
 
 CHECK=0
 case "${1:-}" in
@@ -312,10 +312,39 @@ find_metric() {
 
 # rate_or_value NAME WINDOW -> a promQL fragment: rate() for counters, raw for gauges
 rate_expr() {
+  # $3, when given, is an extra label matcher such as 'topic=""'
+  _sel="namespace=\"$NS\""
+  [ -n "${3:-}" ] && _sel="$_sel,$3"
   case "$1" in
-    *_total|*_count) echo "rate($1{namespace=\"$NS\"}[${2}])" ;;
-    *)               echo "$1{namespace=\"$NS\"}" ;;
+    *_total|*_count) echo "rate($1{$_sel}[${2}])" ;;
+    *)               echo "$1{$_sel}" ;;
   esac
+}
+
+# Why the topic matcher matters — this cost a factor of two on every throughput
+# figure the toolkit produced.
+#
+# BrokerTopicMetrics publishes an all-topics aggregate MBean AND one MBean per
+# topic. The stock Strimzi exporter rules map all of them to the SAME Prometheus
+# name (kafka_server_brokertopicmetrics_bytesin_total): one series with no topic
+# label, and one per topic. So
+#
+#     sum by(pod) (rate(kafka_server_brokertopicmetrics_bytesin_total[2m]))
+#
+# adds the aggregate to the sum of its own parts and returns exactly 2x the real
+# rate. Measured on a live capture: cluster/topic ratio 2.004, 2.001, 2.000.
+#
+# In PromQL a matcher of label="" selects series where that label is ABSENT, so
+# {topic=""} is the broker aggregate alone and {topic!=""} the per-topic series.
+# Some exporter configs publish only per-topic series; AGG_SEL is resolved once
+# against the live data so either shape is handled.
+AGG_SEL='topic=""'
+agg_probe() {
+  [ -z "$M_BYTESIN" ] && return 0
+  if [ -z "$(qj "$M_BYTESIN{namespace=\"$NS\",topic=\"\"}" "" | head -1)" ]; then
+    # no aggregate series — summing the per-topic ones is then correct, not double
+    AGG_SEL='topic!=""'
+  fi
 }
 
 # ---------------------------------------------------------------- discovery -
@@ -405,7 +434,15 @@ M_URP=$(find_metric 'underreplicatedpartitions|under_replicated_partitions' gaug
 M_OFFLINE=$(find_metric 'offlinepartitionscount|offline_partitions_count' gauge)
 M_ACTIVECTL=$(find_metric 'activecontrollercount|active_controller_count' gauge)
 M_UNCLEAN=$(find_metric 'uncleanleaderelection' counter)
-M_PARTS=$(find_metric 'replicamanager.*partitioncount|partition_count' gauge)
+# ANCHORED. `replicamanager.*partitioncount` also matches
+# replicamanager_atminisrpartitioncount and _underminisrpartitioncount, and
+# find_metric takes the first alphabetical hit — so "a" beat "p" and the toolkit
+# reported AtMinIsrPartitionCount (2/2/4) as the partition count beside a leader
+# count of 163.
+M_PARTS=$(find_metric 'replicamanager_partitioncount$|^kafka_server_replicamanager_partitioncount$' gauge)
+# AtMinIsr is worth having in its own right: those partitions have exactly
+# min.insync.replicas in sync, so one more replica loss stops writes to them.
+M_ATMINISR=$(find_metric 'replicamanager_atminisrpartitioncount$' gauge)
 M_LEADERS=$(find_metric 'replicamanager.*leadercount|leader_count' gauge)
 M_ISRSHRINK=$(find_metric 'isrshrink' counter)
 M_ISREXPAND=$(find_metric 'isrexpand' counter)
@@ -472,6 +509,9 @@ if [ -n "$M_BYTESIN" ]; then
     fi
   done
 fi
+# Decide once whether a broker-level aggregate series exists, so the throughput
+# queries select it instead of summing it together with its own per-topic parts.
+agg_probe
 
 # ---------------------------------------------------------------- preflight -
 selfcheck() {
@@ -584,7 +624,7 @@ fi
 # Kafka report is worse than an honest blank.
 HAVE=""
 for pair in "bytesin:$M_BYTESIN" "handler:$M_HANDLER" "netproc:$M_NETPROC" \
-            "urp:$M_URP" "parts:$M_PARTS" "leaders:$M_LEADERS" \
+            "urp:$M_URP" "parts:$M_PARTS" "leaders:$M_LEADERS" "atminisr:$M_ATMINISR" \
             "reqq:$M_REQQ" "respq:$M_RESPQ" "purg:$M_PURG" \
             "isr:$M_ISRSHRINK" "fetchlag:$M_FETCHLAG" "heap:$M_HEAP" "gc:$M_GCCOUNT"; do
   [ -n "${pair#*:}" ] && HAVE="$HAVE ${pair%%:*}"
@@ -605,7 +645,7 @@ C_LAG="$OUTDIR/kafka_lag_${TAG}.csv"
 C_HLT="$OUTDIR/kafka_health_${TAG}.csv"
 
 echo "ts_ist,elapsed_s,active_controllers,offline_partitions,under_replicated,unclean_elections,partitions_total,leaders_total,bytes_in_mb_s,bytes_out_mb_s,messages_in_s" > "$C_CLU"
-echo "ts_ist,elapsed_s,pod,bytes_in_mb_s,bytes_out_mb_s,messages_in_s,handler_idle_pct,network_idle_pct,request_queue,response_queue,purgatory,under_replicated,partitions,leaders,isr_shrink_s,isr_expand_s,follower_lag" > "$C_BRK"
+echo "ts_ist,elapsed_s,pod,bytes_in_mb_s,bytes_out_mb_s,messages_in_s,handler_idle_pct,network_idle_pct,request_queue,response_queue,purgatory,under_replicated,partitions,leaders,isr_shrink_s,isr_expand_s,follower_lag,at_min_isr" > "$C_BRK"
 echo "ts_ist,elapsed_s,topic,bytes_in_mb_s,bytes_out_mb_s,messages_in_s" > "$C_TOP"
 echo "ts_ist,elapsed_s,request,total_ms,queue_ms,local_ms,req_per_s" > "$C_LAT"
 echo "ts_ist,elapsed_s,pod,heap_used_mb,gc_count_s,gc_time_ms_s" > "$C_JVM"
@@ -727,11 +767,11 @@ while :; do
   # ---------- Thanos: broker throughput + saturation ----------
   : > "$TMP/brk"
   if [ -n "$M_BYTESIN" ]; then
-    qj "sum by($POD_LABEL) ($(rate_expr "$M_BYTESIN" "$W"))"  "$POD_LABEL" > "$TMP/in"  || :
-    qj "sum by($POD_LABEL) ($(rate_expr "$M_BYTESOUT" "$W"))" "$POD_LABEL" > "$TMP/out" || :
-    qj "sum by($POD_LABEL) ($(rate_expr "$M_MSGIN" "$W"))"    "$POD_LABEL" > "$TMP/msg" || :
+    qj "sum by($POD_LABEL) ($(rate_expr "$M_BYTESIN"  "$W" "$AGG_SEL"))" "$POD_LABEL" > "$TMP/in"  || :
+    qj "sum by($POD_LABEL) ($(rate_expr "$M_BYTESOUT" "$W" "$AGG_SEL"))" "$POD_LABEL" > "$TMP/out" || :
+    qj "sum by($POD_LABEL) ($(rate_expr "$M_MSGIN"    "$W" "$AGG_SEL"))" "$POD_LABEL" > "$TMP/msg" || :
   else : > "$TMP/in"; : > "$TMP/out"; : > "$TMP/msg"; fi
-  for m in HANDLER NETPROC REQQ RESPQ PURG URP PARTS LEADERS FETCHLAG; do
+  for m in HANDLER NETPROC REQQ RESPQ PURG URP PARTS LEADERS FETCHLAG ATMINISR; do
     eval "nm=\$M_$m"
     f="$TMP/$(echo $m | tr 'A-Z' 'a-z')"
     if [ -n "$nm" ]; then qj "sum by($POD_LABEL) ($nm{namespace=\"$NS\"})" "$POD_LABEL" > "$f" || :; else : > "$f"; fi
@@ -749,9 +789,9 @@ while :; do
   # ---------- Thanos: per-topic ----------
   : > "$TMP/topic"
   if [ -n "$M_BYTESIN" ] && [ -n "$TOPIC_LABEL" ]; then
-    qj "sum by($TOPIC_LABEL) ($(rate_expr "$M_BYTESIN" "$W"))"  "$TOPIC_LABEL" > "$TMP/t_in"  || :
-    qj "sum by($TOPIC_LABEL) ($(rate_expr "$M_BYTESOUT" "$W"))" "$TOPIC_LABEL" > "$TMP/t_out" || :
-    qj "sum by($TOPIC_LABEL) ($(rate_expr "$M_MSGIN" "$W"))"    "$TOPIC_LABEL" > "$TMP/t_msg" || :
+    qj "sum by($TOPIC_LABEL) ($(rate_expr "$M_BYTESIN"  "$W" 'topic!=""'))" "$TOPIC_LABEL" > "$TMP/t_in"  || :
+    qj "sum by($TOPIC_LABEL) ($(rate_expr "$M_BYTESOUT" "$W" 'topic!=""'))" "$TOPIC_LABEL" > "$TMP/t_out" || :
+    qj "sum by($TOPIC_LABEL) ($(rate_expr "$M_MSGIN"    "$W" 'topic!=""'))" "$TOPIC_LABEL" > "$TMP/t_msg" || :
   else : > "$TMP/t_in"; : > "$TMP/t_out"; : > "$TMP/t_msg"; fi
 
   # ---------- Thanos: latency by request type ----------

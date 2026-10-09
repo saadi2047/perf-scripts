@@ -15,7 +15,7 @@ import os, csv, argparse, datetime, statistics as st
 
 # Bumped whenever the report's judgement changes, so a file can always be traced
 # to the build that produced it. Printed in the masthead and by --version.
-KR_VERSION = "2026-10-09.6  (coherence cross-checks + no-load detection)"
+KR_VERSION = "2026-10-09.7  (frozen-series verdicts + at-min-ISR check)"
 
 def read(p):
     if not p or not os.path.exists(p):
@@ -395,6 +395,7 @@ class Win:
         self.have_ctl = bool(ctl)
         self.min_idle = mn(self.brk, "handler_idle_pct")
         self.min_net = mn(self.brk, "network_idle_pct")
+        self.max_atminisr = pk(self.brk, "at_min_isr")
         self.max_reqq = pk(self.brk, "request_queue")
         self.max_purg = pk(self.brk, "purgatory")
         self.max_lag = None
@@ -571,9 +572,10 @@ class Win:
 # ----------------------------------------------------------------- sections --
 def sec_health(w):
     h = ['<h2>1 · Cluster health — the go / no-go checks</h2>']
-    h.append('<p class="muted">These four decide whether the run is valid at all. Throughput figures from a '
+    h.append('<p class="muted">These decide whether the run is valid at all. Throughput figures from a '
              'window with offline partitions or unclean elections describe a broken cluster, not a '
-             'benchmark.</p>')
+             'benchmark — and partitions sitting at the minimum ISR are one replica loss away from '
+             'rejecting writes.</p>')
     rows = []
     if w.have_ctl:
         bad = len(w.ctl_bad)
@@ -590,6 +592,14 @@ def sec_health(w):
     rows.append(("Unclean elections", w.max_uncl, (w.max_uncl == 0) if w.max_uncl is not None else None,
                  "none — no data was lost to a leader change",
                  "DATA LOSS: a replica outside the ISR became leader"))
+    # At-min-ISR is a different question from under-replicated and a sharper one:
+    # these partitions are IN sync, but with exactly min.insync.replicas members.
+    # URP stays 0 while one more replica loss stops writes to them outright.
+    rows.append(("At min ISR (peak)", w.max_atminisr,
+                 (w.max_atminisr == 0) if w.max_atminisr is not None else None,
+                 "every partition had spare in-sync replicas above the minimum",
+                 "these partitions sit at exactly min.insync.replicas — one more "
+                 "replica loss and producers get NOT_ENOUGH_REPLICAS on them"))
     h.append('<div class="tbl-wrap"><table><tr><th>Check</th><th class="num">Worst value</th>'
              '<th>Verdict</th><th>Reading</th></tr>')
     for name, val, ok, oktxt, badtxt in rows:
@@ -620,6 +630,12 @@ def sec_window(w):
     if w.min_idle is None:
         h.append(kpi("Worst handler idle", "not measured", "",
                      "no usable idle series — see data quality"))
+    elif getattr(w, "idle_frozen", False):
+        # Showing the number next to "under 30% = starved" invites the reader to
+        # judge it against that threshold, which is the one thing it cannot be
+        # judged against.
+        h.append(kpi("Worst handler idle", f1(w.min_idle, "% *"), "",
+                     "* since-start average, not this window"))
     else:
         idle_cls = "bad" if w.min_idle < 30 else ("warn" if w.min_idle < 50 else "good")
         h.append(kpi("Worst handler idle", f1(w.min_idle, "%"), idle_cls,
@@ -666,11 +682,16 @@ def sec_brokers(w):
         q, pu = pk(rs, "request_queue"), pk(rs, "purgatory")
         u, le = pk(rs, "under_replicated"), pk(rs, "leaders")
         # "healthy headroom" must never be the fallback for a missing figure.
-        # An absent or refused idle percentage is unknown, not good.
+        # An absent or refused idle percentage is unknown, not good — and nor is
+        # a frozen one. The banner and the summary both say saturation is
+        # unknown when the series never varied, so this column has to agree:
+        # three rows reading "healthy headroom" is what a client would quote.
         if (u or 0) > 0:
             cls, txt = "bad", "replicas fell behind on this broker"
         elif hi is None:
             cls, txt = "", "handler idle not measured — saturation unknown"
+        elif getattr(w, "idle_frozen", False):
+            cls, txt = "", "idle % is a since-start average — saturation unknown"
         elif hi < 30:
             cls, txt = "bad", "saturated — handlers starved"
         elif hi < 50:

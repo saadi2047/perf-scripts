@@ -133,6 +133,7 @@ bin_, bout, bmsg = rd("in"), rd("out"), rd("msg")
 handler, netproc = rd("handler"), rd("netproc")
 reqq, respq, purg = rd("reqq"), rd("respq"), rd("purg")
 urp, parts, leaders = rd("urp"), rd("parts"), rd("leaders")
+atminisr = rd("atminisr")
 flag = rd("fetchlag")
 shrink, expand = rd("isrshrink"), rd("isrexpand")
 heap, gcc, gct = rd("heap"), rd("gcc"), rd("gct")
@@ -307,7 +308,8 @@ for b in sorted(brokers):
                             _n(opt("purg", purg, b)), _n(opt("urp", urp, b)),
                             _n(opt("parts", parts, b)), _n(opt("leaders", leaders, b)),
                             f"{shrink.get(b,0):.4f}", f"{expand.get(b,0):.4f}",
-                            f"{flag.get(b,0):.0f}"])
+                            f"{flag.get(b,0):.0f}",
+                            _n(opt("atminisr", atminisr, b))])
 if not brokers:
     A("      (no broker pods resolved)")
 

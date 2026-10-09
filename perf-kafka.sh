@@ -44,7 +44,7 @@ set -u
 # Bump on every change. Printed at startup, by --version and by --check, and
 # written into each run folder, so there is never any doubt about which build
 # produced a given set of CSVs.
-PK_VERSION="2026-10-09.11 (controller metrics, windowed idle, split purgatory)"
+PK_VERSION="2026-10-09.12 (paste-safe discovery, KRaft name fallback, clamped %)"
 
 CHECK=0
 case "${1:-}" in
@@ -379,14 +379,21 @@ kpods() { oc -n "$NS" get pods --no-headers -o custom-columns="$PODCOLS" 2>/dev/
 # Broker / controller roles. Strimzi KRaft labels node pools with
 # strimzi.io/broker-role and strimzi.io/controller-role; older ZK-based clusters
 # name the pods <cluster>-kafka-N and <cluster>-zookeeper-N.
-roles() {
-  oc -n "$NS" get pods --no-headers -o custom-columns=\
-'POD:.metadata.name,B:.metadata.labels.strimzi\.io/broker-role,C:.metadata.labels.strimzi\.io/controller-role,POOL:.metadata.labels.strimzi\.io/pool-name' 2>/dev/null
-}
+# The column spec lives in a variable on ONE line. It used to be a backslash
+# line-continuation followed by a quoted string, which is the first thing a
+# terminal paste mangles: lose the backslash and `oc` is handed an empty
+# -o custom-columns=, returns nothing, and the script reports "no broker pods
+# found" on a cluster that plainly has them.
+ROLECOLS='POD:.metadata.name,B:.metadata.labels.strimzi\.io/broker-role,C:.metadata.labels.strimzi\.io/controller-role,POOL:.metadata.labels.strimzi\.io/pool-name'
+roles() { oc -n "$NS" get pods --no-headers -o custom-columns="$ROLECOLS" 2>/dev/null; }
+
 BROKERS=$(roles | awk '$2=="true"{print $1}')
 CONTROLLERS=$(roles | awk '$3=="true"{print $1}')
+# Name-based fallback for when the labels are absent or the label query fails.
+# `-kafka-N` alone only covers ZooKeeper-era naming; a KRaft node pool produces
+# <cluster>-broker-N, so on this very cluster the fallback could never match.
 if [ -z "$BROKERS" ]; then
-  BROKERS=$(kpods | awk '$1 ~ /-kafka-[0-9]+$/ {print $1}')
+  BROKERS=$(kpods | awk '$1 ~ /-(kafka|broker)-[0-9]+$/ {print $1}')
 fi
 if [ -z "$CONTROLLERS" ]; then
   CONTROLLERS=$(kpods | awk '$1 ~ /-(controller|zookeeper)-[0-9]+$/ {print $1}')
@@ -397,7 +404,25 @@ OPERATOR=$(oc get pods -A --no-headers \
              -o custom-columns='NS:.metadata.namespace,POD:.metadata.name,PHASE:.status.phase' 2>/dev/null \
            | awk '$2 ~ /strimzi-cluster-operator|amq-streams-cluster-operator/ && $3=="Running"{print $1"/"$2}' | head -1)
 
-[ -z "$BROKERS" ] && die "ERROR: no Kafka broker pods found in namespace $NS"
+if [ -z "$BROKERS" ]; then
+  _np=$(kpods | grep -c . 2>/dev/null) || _np=0
+  _names=$(kpods | awk '{print "           " $1}' | head -8)
+  if [ "${_np:-0}" -eq 0 ]; then
+    die "ERROR: no pods at all in namespace $NS
+         Either the namespace is wrong (-n NS) or the session cannot see it:
+           oc get pods -n $NS"
+  fi
+  die "ERROR: $_np pod(s) in $NS, but none identified as a Kafka broker.
+         Pods found:
+$_names
+         A broker is identified by the strimzi.io/broker-role=true label, or by
+         a name ending -kafka-N / -broker-N. Check the labels with:
+           oc get pods -n $NS -L strimzi.io/broker-role -L strimzi.io/controller-role
+         If the labels are there and this still fails, the script's own
+         ROLECOLS line is damaged — re-copy the file with a heredoc, never vi:
+           head -1 perf-kafka.sh   # must be: #!/usr/bin/env sh
+           sh -n perf-kafka.sh     # must print nothing"
+fi
 
 # ---- in-pod CLI probe -----------------------------------------------------
 BPOD=$(printf '%s\n' "$BROKERS" | head -1)
@@ -831,7 +856,7 @@ while :; do
   # fallback, flagged, for exporters that publish no counter.
   : > "$TMP/handler_w"
   if [ -n "$M_HANDLER_C" ]; then
-    qj "sum by($POD_LABEL) (rate($M_HANDLER_C{namespace=\"$NS\"}[${W}])) * 100 / 1e9" \
+    qj "clamp_max(sum by($POD_LABEL) (rate($M_HANDLER_C{namespace=\"$NS\"}[${W}])) * 100 / 1e9, 100)" \
        "$POD_LABEL" > "$TMP/handler_w" 2>/dev/null || :
   fi
   # A live reading wins over the frozen mean; an empty result must not clobber it.
@@ -856,7 +881,7 @@ while :; do
   # `> 0` drops listeners whose processors never recorded a ratio; min() then
   # gives the busiest listener that is actually carrying connections.
   if [ -n "$M_IOWAIT" ]; then
-    qj "min by($POD_LABEL) ($M_IOWAIT{namespace=\"$NS\"} > 0) * 100" \
+    qj "clamp_max(min by($POD_LABEL) ($M_IOWAIT{namespace=\"$NS\"} > 0) * 100, 100)" \
        "$POD_LABEL" > "$TMP/netproc_w" 2>/dev/null || :
     [ -s "$TMP/netproc_w" ] && cp "$TMP/netproc_w" "$TMP/netproc"
   fi

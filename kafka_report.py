@@ -15,7 +15,7 @@ import os, re, csv, argparse, datetime, textwrap, statistics as st
 
 # Bumped whenever the report's judgement changes, so a file can always be traced
 # to the build that produced it. Printed in the masthead and by --version.
-KR_VERSION = "2026-10-09.11 (idle provenance, produce purgatory)"
+KR_VERSION = "2026-10-09.12 (GC-absent cross-check)"
 
 def read(p):
     if not p or not os.path.exists(p):
@@ -576,6 +576,14 @@ class Win:
                 if any(b < a - 1 for a, b in zip(seq, seq[1:])):
                     fell = True
                     break
+            if not gv and any(F(r.get("heap_used_mb")) is not None for r in self.jvm):
+                # heap resolved from the same jvm_* family but GC did not, so it
+                # is a naming miss rather than an unscraped exporter
+                self.xchecks.append(
+                    "JVM heap resolved but the GC series did not, so GC rate and pause time are "
+                    "absent (shown as a dash, never as zero). The exporter publishes heap under "
+                    "jvm_memory_*, so the GC metrics exist under a name the collector did not "
+                    "match — list them with ./perf-kafka.sh --metrics gc and send the output.")
             if gc_zero and fell:
                 self.gc_unmeasured = True
                 self.xchecks.append(

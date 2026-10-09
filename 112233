@@ -163,3 +163,17 @@
       list what the exporter publishes with: ./perf-kafka.sh --metrics <pattern>
 [OK] REPORT: /home/osuser/saadi/M/Muzzammil/perf-kafka/kafka-test-20261009_174535/KAFKA_Report_20261009_174908.html
 [osuser@bastion perf-kafka]$
+[osuser@bastion perf-kafka]$ vi perf-kafka.sh
+[osuser@bastion perf-kafka]$ vi kafka_sample.py
+[osuser@bastion perf-kafka]$ vi kafka_report.py
+[osuser@bastion perf-kafka]$ chmod +x perf-kafka.sh
+[osuser@bastion perf-kafka]$ ./perf-kafka.sh
+
+   --------------------------------------------------------------
+   KAFKA CAPTURE SETTINGS
+   --------------------------------------------------------------
+   1. Sampling interval, seconds (10-300, recommended 15) [15]: 10
+   2. How long to run, seconds (60-86400 = up to 24h; 300=5m, 1800=30m, 3600=1h) [3600]: 180
+   --------------------------------------------------------------
+ERROR: no Kafka broker pods found in namespace perf-kafka
+[osuser@bastion perf-kafka]$

@@ -44,7 +44,7 @@ set -u
 # Bump on every change. Printed at startup, by --version and by --check, and
 # written into each run folder, so there is never any doubt about which build
 # produced a given set of CSVs.
-PK_VERSION="2026-10-09.4  (gauge/counter picker + countdown)"
+PK_VERSION="2026-10-09.6  (same-broker latency, PVC probe, honest GC + countdown)"
 
 CHECK=0
 case "${1:-}" in
@@ -426,8 +426,23 @@ M_HEAP=$(find_metric '^jvm_memory_bytes_used$|^jvm_memory_used_bytes$' gauge)
 M_GCCOUNT=$(find_metric '^jvm_gc_collection_seconds_count$|^jvm_gc_pause_seconds_count$' counter)
 M_GCTIME=$(find_metric '^jvm_gc_collection_seconds_sum$|^jvm_gc_pause_seconds_sum$' counter)
 M_CGLAG=$(find_metric '^kafka_consumergroup_lag$|consumergroup_lag' gauge)
-M_PVCUSED=$(find_metric '^kubelet_volume_stats_used_bytes$' gauge)
-M_PVCCAP=$(find_metric '^kubelet_volume_stats_capacity_bytes$' gauge)
+# PVC usage comes from the kubelet, not from Kafka. The name catalogue is built
+# mostly from the broker's own JMX exporter, which obviously never publishes a
+# kubelet series — so looking these up by catalogue membership always failed and
+# the disk CSV came out empty with no error. Ask Thanos directly instead: if the
+# query returns a sample, the series exists.
+pvc_probe() {
+  for n in "$1" "$2"; do
+    [ -z "$n" ] && continue
+    if [ -n "$(qj "$n{namespace=\"$NS\"}" "persistentvolumeclaim" | awk -F'\t' '$1!="-"{print;exit}')" ]; then
+      echo "$n"; return 0
+    fi
+  done
+  return 0
+}
+M_PVCUSED=$(pvc_probe 'kubelet_volume_stats_used_bytes' 'kubelet_volume_stats_used_bytes:sum')
+M_PVCCAP=$(pvc_probe 'kubelet_volume_stats_capacity_bytes' 'kubelet_volume_stats_capacity_bytes:sum')
+[ -z "$M_PVCUSED" ] || [ -n "$M_PVCCAP" ] || M_PVCCAP="kubelet_volume_stats_capacity_bytes"
 
 # which label carries the pod name on the JMX series
 POD_LABEL="pod"
@@ -622,8 +637,12 @@ finish() {
   echo "   PERF-KAFKA WINDOW SUMMARY   (tag: $TAG, namespace: $NS)"
   echo "=================================================================================="
   printf "   START / END (IST) : %s  ->  %s\n" "$START_IST" "$END_IST"
-  printf "   DURATION          : %ss (%s min) over %s samples\n" \
-     "$EL" "$(awk -v e=$EL 'BEGIN{printf "%.1f", e/60}')" "$SAMPLES"
+  _dnote=""
+  if [ "$DURATION" -gt 0 ] && [ "$EL" -gt "$DURATION" ]; then
+    _dnote=$(printf "   (requested %ss; the final sample was allowed to finish)" "$DURATION")
+  fi
+  printf "   DURATION          : %ss (%s min) over %s samples%s\n" \
+     "$EL" "$(awk -v e=$EL 'BEGIN{printf "%.1f", e/60}')" "$SAMPLES" "$_dnote"
   printf "   BROKERS           : %s\n" "$NBROKER"
   if [ -n "$PEAK_IN" ]; then
     printf "   PEAK THROUGHPUT   : in %s MB/s   out %s MB/s   %s msg/s\n" "$PEAK_IN" "$PEAK_OUT" "$PEAK_MSG"
@@ -683,6 +702,7 @@ printf "      run folder : %s\n" "$OUTDIR"
   echo "started_ist=$(TZ=Asia/Kolkata date '+%Y-%m-%d %H:%M:%S')"
   echo "namespace=$NS"; echo "interval_s=$INT"; echo "duration_s=$DURATION"
   echo "tag=$TAG"; echo "brokers=$NBROKER"
+  echo "latency_kind=$LAT_KIND"
 } > "$OUTDIR/run_info.txt" 2>/dev/null
 [ "$NOREPORT" -eq 0 ] && printf "      the HTML report is built automatically when the window closes\n"
 echo
@@ -694,19 +714,14 @@ while :; do
   sleep "$INT"
   NOW=$(date +%s)
   if [ "$DEADLINE" -gt 0 ] && [ "$NOW" -ge "$DEADLINE" ]; then
-    echo "[*] duration limit reached (${DURATION}s) — closing the window on schedule."
+    # The last sample is allowed to finish; a collection cannot be aborted
+    # half-way without writing a partial row. So the window can run slightly
+    # past the requested duration, and the summary states the real elapsed
+    # time rather than the requested one.
+    echo "[*] requested ${DURATION}s reached — no further samples will start."
     finish
   fi
   i=$((i+1)); SAMPLES=$i
-  if [ "$DEADLINE" -gt 0 ]; then
-    REMAIN=$(( DEADLINE - NOW )); [ "$REMAIN" -lt 0 ] && REMAIN=0
-    TOTSAMP=$(( DURATION / INT ))
-    ETA=$(TZ=Asia/Kolkata date -d "@$DEADLINE" '+%H:%M:%S' 2>/dev/null \
-          || TZ=Asia/Kolkata date -r "$DEADLINE" '+%H:%M:%S' 2>/dev/null || echo "?")
-    PROG=$(awk -v d="$DURATION" -v r="$REMAIN" 'BEGIN{p=(d>0)?(d-r)*100/d:0; if(p>100)p=100; printf "%.0f", p}')
-  else
-    REMAIN=""; TOTSAMP=""; ETA=""; PROG=""
-  fi
   W="${INT}s"; [ "$INT" -lt 60 ] && W="2m"   # rate() needs >= 2 scrapes
 
   # ---------- Thanos: broker throughput + saturation ----------
@@ -743,13 +758,22 @@ while :; do
   : > "$TMP/lat"
   if [ -n "$M_TOTTIME" ]; then
     _ql=""; [ "$LAT_Q" -eq 1 ] && _ql=',quantile="0.99"'
-    qj "max by(request) ($M_TOTTIME{namespace=\"$NS\"$_ql})" "request" > "$TMP/l_tot" 2>/dev/null
+    # Grouped by (request, broker), NOT by request alone. Three separate
+    # `max by(request)` queries take each column's maximum independently, so the
+    # total can come from one broker while the queue time comes from another —
+    # which produced queue times LARGER than the total they are part of. Keeping
+    # the broker label lets the renderer take all three from the same broker, so
+    # the breakdown belongs to one real request path.
+    qj "max by(request,$POD_LABEL) ($M_TOTTIME{namespace=\"$NS\"$_ql})" \
+       "request,$POD_LABEL" > "$TMP/l_tot" 2>/dev/null
     [ -s "$TMP/l_tot" ] || : > "$TMP/l_tot"
     if [ -n "$M_QTIME" ]; then
-      qj "max by(request) ($M_QTIME{namespace=\"$NS\"$_ql})" "request" > "$TMP/l_q" 2>/dev/null
+      qj "max by(request,$POD_LABEL) ($M_QTIME{namespace=\"$NS\"$_ql})" \
+         "request,$POD_LABEL" > "$TMP/l_q" 2>/dev/null
     fi; [ -s "$TMP/l_q" ] || : > "$TMP/l_q"
     if [ -n "$M_LTIME" ]; then
-      qj "max by(request) ($M_LTIME{namespace=\"$NS\"$_ql})" "request" > "$TMP/l_l" 2>/dev/null
+      qj "max by(request,$POD_LABEL) ($M_LTIME{namespace=\"$NS\"$_ql})" \
+         "request,$POD_LABEL" > "$TMP/l_l" 2>/dev/null
     fi; [ -s "$TMP/l_l" ] || : > "$TMP/l_l"
     [ -n "$M_REQRATE" ] && qj "sum by(request) ($(rate_expr "$M_REQRATE" "$W"))" "request" > "$TMP/l_r" || : > "$TMP/l_r"
   else : > "$TMP/l_tot"; : > "$TMP/l_q"; : > "$TMP/l_l"; : > "$TMP/l_r"; fi
@@ -827,6 +851,30 @@ while :; do
     echo "$TS,$EL,unavailable_partitions,$nun," >> "$C_HLT"
   fi
 
+  # ---------- countdown, computed HERE and not at the top of the loop ----------
+  # Two separate bugs lived in the old placement and arithmetic:
+  #
+  #   * REMAIN/ETA were computed before collection, then printed after it. On a
+  #     cycle that took 11s, the screen said "0m10s remaining, ends ~15:57:45"
+  #     at 15:57:45 — already past its own ETA.
+  #   * TOTSAMP was DURATION/INT, i.e. it assumed a cycle costs only the sleep.
+  #     A cycle is the sleep PLUS the Thanos and oc round trips, which here is
+  #     20-43s against a 10s interval, so "sample 6/18" counted towards a total
+  #     the run could never reach.
+  #
+  # Both are now derived from the measured cycle time.
+  NOW=$(date +%s)
+  CYC=$(( NOW - T0 )); [ "$i" -gt 0 ] && CYC=$(( CYC / i )); [ "$CYC" -lt 1 ] && CYC=1
+  if [ "$DEADLINE" -gt 0 ]; then
+    REMAIN=$(( DEADLINE - NOW )); [ "$REMAIN" -lt 0 ] && REMAIN=0
+    TOTSAMP=$(( i + (REMAIN + CYC - 1) / CYC ))
+    ETA=$(TZ=Asia/Kolkata date -d "@$DEADLINE" '+%H:%M:%S' 2>/dev/null \
+          || TZ=Asia/Kolkata date -r "$DEADLINE" '+%H:%M:%S' 2>/dev/null || echo "?")
+    PROG=$(awk -v d="$DURATION" -v r="$REMAIN" 'BEGIN{p=(d>0)?(d-r)*100/d:0; if(p>100)p=100; printf "%.0f", p}')
+  else
+    REMAIN=""; TOTSAMP=""; ETA=""; PROG=""
+  fi
+
   if [ "$QUIET" -eq 1 ]; then
     if [ -n "$REMAIN" ]; then
       printf "[kafka] %s  sample %s/%s  %s%%  %s left  in %s MB/s  hnd-idle %s%%  urp %s\n" \
@@ -840,7 +888,7 @@ while :; do
   fi
   clear
   echo "=================================================================================="
-  echo "   PERF-KAFKA — $TS IST    cycle ${INT}s    ns=$NS    tag=$TAG"
+  echo "   PERF-KAFKA — $TS IST    cycle ${INT}s set / ${CYC}s actual    ns=$NS    tag=$TAG"
   if [ -n "$REMAIN" ]; then
     _bar=$(awk -v p="$PROG" 'BEGIN{n=int(p/2.5); for(i=0;i<40;i++) printf (i<n)?"#":"."}')
     printf "   elapsed %-7s  REMAINING %-8s  ends ~%s IST   sample %s/%s\n" \

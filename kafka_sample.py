@@ -34,6 +34,58 @@ def rd(name):
     return out
 
 
+def squeeze(s, w):
+    """Shorten to w chars keeping BOTH ends. Plain truncation turned
+    perf-kafka-cluster-controller-3/-4/-5 into three identical rows, so the one
+    character that said which controller it was got cut off."""
+    if len(s) <= w:
+        return s
+    keep = w - 1
+    head = keep // 2
+    return s[:head] + "~" + s[len(s) - (keep - head):]
+
+
+def rd2(name):
+    """read 'k1<TAB>k2<TAB>value' into {(k1, k2): float} — used where a value
+    only means something together with the broker it came from"""
+    out = {}
+    try:
+        with open(os.path.join(TMP, name)) as fh:
+            for line in fh:
+                p = line.rstrip("\n").split("\t")
+                if len(p) < 3:
+                    continue
+                a, b = p[0].strip(), p[1].strip()
+                try:
+                    v = float(p[-1])
+                except ValueError:
+                    continue
+                if a and a != "-":
+                    out[(a, b)] = v
+    except OSError:
+        pass
+    return out
+
+
+def coherent_latency(tot, que, loc):
+    """Collapse per-(request, broker) latency to per-request by picking, for each
+    request type, the broker with the worst total time and taking its queue and
+    local time as well.
+
+    Taking each column's own maximum is what allowed a queue time of 8,075 ms to
+    be printed beside a total of 8,029 ms. Queue and local are PARTS of total, so
+    the three only mean anything when they describe the same broker.
+    """
+    best = {}
+    for (rq, pod), v in tot.items():
+        if rq not in best or v > best[rq][1]:
+            best[rq] = (pod, v)
+    t = {rq: v for rq, (pod, v) in best.items()}
+    q = {rq: que[(rq, pod)] for rq, (pod, _) in best.items() if (rq, pod) in que}
+    l = {rq: loc[(rq, pod)] for rq, (pod, _) in best.items() if (rq, pod) in loc}
+    return t, q, l
+
+
 def lines(name):
     try:
         with open(os.path.join(TMP, name)) as f:
@@ -85,7 +137,8 @@ flag = rd("fetchlag")
 shrink, expand = rd("isrshrink"), rd("isrexpand")
 heap, gcc, gct = rd("heap"), rd("gcc"), rd("gct")
 t_in, t_out, t_msg = rd("t_in"), rd("t_out"), rd("t_msg")
-l_tot, l_q, l_l, l_r = rd("l_tot"), rd("l_q"), rd("l_l"), rd("l_r")
+l_tot, l_q, l_l = coherent_latency(rd2("l_tot"), rd2("l_q"), rd2("l_l"))
+l_r = rd("l_r")
 pvcu, pvcc = rd("pvcu"), rd("pvcc")
 
 brokers = [b for b in E("BROKERS", "").split() if b]
@@ -236,7 +289,7 @@ for b in sorted(brokers):
     if hi is not None and (min_idle is None or hi < min_idle):
         min_idle = hi
     flagc = "!" if (hi is not None and hi < 30) or (opt("urp", urp, b) or 0) > 0 else ""
-    A(f"  {b[:27]:<28}"
+    A(f"  {squeeze(b,27):<28}"
       f"{(f'{i_:9.2f}' if have_tput else '        -')}"
       f"{(f'{o_:9.2f}' if have_tput else '        -')}"
       f"{(f'{m_:9.0f}' if have_tput else '        -')}"
@@ -273,7 +326,7 @@ if l_tot:
     A("  ----------------------------------------------------------------------------------")
     A(f"  {'REQUEST':<24}{'total ms':>10}{'queue ms':>10}{'local ms':>10}{'req/s':>10}")
     for rq in sorted(l_tot, key=lambda k: -l_tot[k])[:8]:
-        A(f"  {rq[:23]:<24}{l_tot.get(rq,0):10.1f}{l_q.get(rq,0):10.1f}"
+        A(f"  {squeeze(rq,23):<24}{l_tot.get(rq,0):10.1f}{l_q.get(rq,0):10.1f}"
           f"{l_l.get(rq,0):10.1f}{l_r.get(rq,0):10.0f}")
         csv_append(E("C_LAT"), [TS, EL, rq, f"{l_tot.get(rq,0):.2f}",
                                 f"{l_q.get(rq,0):.2f}", f"{l_l.get(rq,0):.2f}",
@@ -284,8 +337,22 @@ if l_tot:
         A("      for JoinGroup (rebalance timeout) and means nothing about typical")
         A("      latency. Add quantile rules to the JMX exporter config for p99.")
     else:
-        A("      queue ms climbing while local ms stays flat = brokers are backed up,")
-        A("      not slow — add partitions/brokers rather than tuning the broker.")
+        # This used to print unconditionally. On an idle cluster it told the
+        # operator to add partitions and brokers because Cruise Control's
+        # DescribeClientQuotas call had queued — advice with a real cost
+        # attached, drawn from no load at all. It now only appears when a
+        # request type carrying actual traffic is genuinely queue-bound.
+        hot = [r for r in l_tot
+               if l_r.get(r, 0) > 0
+               and l_tot.get(r, 0) >= 20
+               and l_q.get(r, 0) > l_tot.get(r, 0) * 0.7]
+        if hot:
+            A(f"      {', '.join(sorted(hot)[:3])}: queue time dominates while local time stays")
+            A("      flat = brokers are backed up, not slow — add partitions/brokers.")
+        elif not any(l_r.get(r, 0) > 0 for r in l_tot):
+            A("      NOTE: no request type had a measurable rate — every row above is")
+            A("      background chatter (Cruise Control, the operator, KRaft quorum).")
+            A("      These are not load-test latencies and imply nothing about capacity.")
 
 # ---- 4. topics --------------------------------------------------------------
 if t_in:
@@ -294,7 +361,7 @@ if t_in:
     A("  ----------------------------------------------------------------------------------")
     A(f"  {'TOPIC':<42}{'MB/s in':>10}{'MB/s out':>10}{'msg/s':>10}")
     for t in sorted(t_in, key=lambda k: -t_in[k])[:10]:
-        A(f"  {t[:41]:<42}{t_in[t]/MB:10.3f}{t_out.get(t,0)/MB:10.3f}{t_msg.get(t,0):10.0f}")
+        A(f"  {squeeze(t,41):<42}{t_in[t]/MB:10.3f}{t_out.get(t,0)/MB:10.3f}{t_msg.get(t,0):10.0f}")
     for t in t_in:
         csv_append(E("C_TOP"), [TS, EL, t, f"{t_in[t]/MB:.4f}",
                                 f"{t_out.get(t,0)/MB:.4f}", f"{t_msg.get(t,0):.1f}"])
@@ -308,14 +375,21 @@ watch = [p for p in pods if role_of(p) != "other"] or list(pods)
 for p in sorted(watch, key=lambda x: (role_of(x), x)):
     d = pods[p]
     cpu, mem = top.get(p, (0, 0))
-    hp = heap.get(p, 0) / MB
-    A(f"  {p[:29]:<30}{role_of(p):<12}{d['node'][:15]:<16}{d['ready']:>5}{d['rc']:>5}"
-      f"{cpu:7.0f}m{mem:9.0f}{hp:9.0f}{gcc.get(p,0):7.2f}")
+    # `.get(p, 0)` turned an unresolved GC series into a published "0.00 GC/s",
+    # which reads as a JVM that never collects. A metric that was not measured is
+    # not zero, so it stays blank in the CSV and shows a dash on screen.
+    hp = heap[p] / MB if p in heap else None
+    gc_n = gcc.get(p) if "gc" in HAVE else None
+    gc_t = gct.get(p) if "gc" in HAVE else None
+    A(f"  {squeeze(p,29):<30}{role_of(p):<12}{d['node'][:15]:<16}{d['ready']:>5}{d['rc']:>5}"
+      f"{cpu:7.0f}m{mem:9.0f}{_c(hp, 9)}{('-'.rjust(7)) if gc_n is None else f'{gc_n:7.2f}'}")
     csv_append(E("C_POD"), [TS, EL, p, role_of(p), d["node"], d["phase"],
                             d["ready"], d["rc"], f"{cpu:.0f}", f"{mem:.0f}"])
-    if p in heap or p in gcc:
-        csv_append(E("C_JVM"), [TS, EL, p, f"{hp:.0f}",
-                                f"{gcc.get(p,0):.4f}", f"{gct.get(p,0)*1000:.2f}"])
+    if hp is not None or gc_n is not None:
+        csv_append(E("C_JVM"), [TS, EL, p,
+                                "" if hp is None else f"{hp:.0f}",
+                                "" if gc_n is None else f"{gc_n:.4f}",
+                                "" if gc_t is None else f"{gc_t*1000:.2f}"])
 
 # node co-location check — brokers should not share a node
 bn = {}
@@ -338,7 +412,7 @@ if pvcu:
         c = pvcc.get(v, 0) / 1e9
         pct = (u / c * 100) if c else 0
         mark = " !!" if pct > 75 else ""
-        A(f"  {v[:43]:<44}{u:10.1f}{c:10.1f}{pct:8.1f}%{mark}")
+        A(f"  {squeeze(v,43):<44}{u:10.1f}{c:10.1f}{pct:8.1f}%{mark}")
         owner = ""
         for b in brokers + controllers:
             if v.endswith(b):

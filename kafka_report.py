@@ -15,7 +15,7 @@ import os, csv, argparse, datetime, statistics as st
 
 # Bumped whenever the report's judgement changes, so a file can always be traced
 # to the build that produced it. Printed in the masthead and by --version.
-KR_VERSION = "2026-10-09.5  (input validation + honest verdicts)"
+KR_VERSION = "2026-10-09.6  (coherence cross-checks + no-load detection)"
 
 def read(p):
     if not p or not os.path.exists(p):
@@ -90,17 +90,40 @@ def nonneg(v):
 
 
 def lat_incoherent(t, q, l):
-    """Queue time and local time are disjoint phases of one request: each is a
-    PART of total time. If all three carry the same value then one series was
-    resolved three times, and the queue-vs-local split — the entire point of
-    this section — is not being measured at all. This catches a mis-resolved
-    series at any magnitude, where a ceiling only catches the gross ones."""
-    if t is None or q is None or l is None or t <= 0:
+    """Queue time and local time are disjoint phases of ONE request, and each is
+    a PART of total time. That gives three arithmetic facts no real measurement
+    can break, and each one catches a different collector fault:
+
+      queue > total        the columns came from different brokers
+      local > total        same, or local was resolved to the total series
+      queue + local > total the parts do not fit inside the whole
+      queue = local = total one series was resolved three times
+
+    A ceiling on magnitude only catches the gross cases; these catch a
+    mis-resolved series at any size, which is what matters when the number
+    looks plausible enough to quote.
+    """
+    if t is None or t <= 0:
         return False
-    same = abs(q - t) / t < 0.01 and abs(l - t) / t < 0.01
-    if same:
-        _reject("latency queue/local split", t)
-    return same
+    # The slack must cover the exporter's rounding and nothing else. It publishes
+    # one decimal place, so 1 ms (or 0.1% on large values) is generous; a flat 1%
+    # would quietly absorb a 46 ms violation on an 8-second value, which is
+    # exactly the kind of impossible reading this check exists to catch.
+    slack = max(1.0, t * 0.001)
+    if q is not None and q > t + slack:
+        _reject("queue time above total time", q)
+        return True
+    if l is not None and l > t + slack:
+        _reject("local time above total time", l)
+        return True
+    if q is not None and l is not None:
+        if q + l > t * 1.25:
+            _reject("queue + local above total", q + l)
+            return True
+        if abs(q - t) / t < 0.01 and abs(l - t) / t < 0.01:
+            _reject("latency queue/local split", t)
+            return True
+    return False
 
 
 # per-column validator, applied wherever that column is read
@@ -401,6 +424,120 @@ class Win:
             _reject("partition / leader counts", self.parts_tot)
             self.parts_tot = None
 
+        # ---- cross-checks between series that must agree with each other ----
+        # A single series can look perfectly reasonable on its own and still be
+        # the wrong series. These compare independent measurements that describe
+        # the same physical thing, which is the only way to catch that.
+        self.xchecks = []
+
+        # Request-handler threads are fed by the network threads. If the network
+        # threads really were starved, the handlers would be starved too — so
+        # abundant handler headroom beside a starved network pool means one of
+        # the two series is not what it claims to be.
+        if (self.min_idle is not None and self.min_idle >= 50
+                and self.min_net is not None and self.min_net < 30):
+            self.xchecks.append(
+                f"Request handlers report {f1(self.min_idle)}% idle while the network "
+                f"processors report {f1(self.min_net)}% idle. Those two pools feed each other, so "
+                "one cannot sit nearly idle while the other is starved — one of the two series is "
+                "mis-resolved. The handler figure is the one the saturation verdict uses, so treat "
+                "the network-idle column as unverified.")
+
+        # Kafka's RequestHandlerAvgIdlePercent is a Meter, and the JMX exporter
+        # publishes its mean-since-broker-start alongside the 1/5/15-minute
+        # rates. Pick the since-start mean and the number barely moves: on a
+        # broker up for days it is dominated by idle time, so it reads ~99% no
+        # matter what the load test does. A value that is byte-identical in
+        # every sample for every broker is that frozen mean, not a measurement
+        # of this window — and it would quietly invalidate the whole saturation
+        # verdict, which is the one number this report exists to produce.
+        self.idle_frozen = False
+        if self.brk and self.samples >= 4:
+            bper = {}
+            for r in self.brk:
+                bper.setdefault(r["pod"], []).append((r.get("handler_idle_pct") or "").strip())
+            vals = [v for v in bper.values() if len([x for x in v if x]) >= 4]
+            if vals and all(len(set(v)) == 1 and v[0] for v in vals):
+                self.idle_frozen = True
+                self.xchecks.append(
+                    "Request-handler idle is byte-identical in every sample for every broker "
+                    f"({', '.join(sorted({v[0] + '%' for v in vals}))}). A live gauge varies; this is "
+                    "the exporter's <b>mean since broker start</b>, which on a long-running broker is "
+                    "dominated by idle time and barely moves whatever the load does. It does not "
+                    "describe this window, so <b>no saturation conclusion can be drawn from it</b>. "
+                    "Check for a 1-minute variant with "
+                    "<span class=\"mono\">./perf-kafka.sh --metrics idle</span> and prefer that series.")
+
+        # A JVM whose heap falls between samples has just run a collection. If
+        # the GC rate is identically zero everywhere, the GC series was never
+        # resolved — and a report showing "0.00 GC/s" would read as a healthy JVM.
+        self.gc_unmeasured = False
+        if self.jvm:
+            gv = _vals(self.jvm, "gc_count_s")
+            gc_zero = bool(gv) and max(gv) == 0
+            pj = {}
+            for r in self.jvm:
+                pj.setdefault(r.get("pod", ""), []).append(r)
+            fell = False
+            for v in pj.values():
+                seq = [F(x.get("heap_used_mb")) for x in
+                       sorted(v, key=lambda y: F(y.get("elapsed_s"), 0) or 0)]
+                seq = [x for x in seq if x is not None]
+                if any(b < a - 1 for a, b in zip(seq, seq[1:])):
+                    fell = True
+                    break
+            if gc_zero and fell:
+                self.gc_unmeasured = True
+                self.xchecks.append(
+                    "Heap usage fell between samples, so the JVMs did run garbage collections, "
+                    "yet the GC rate reads exactly 0.00/s for every pod in every sample. The GC "
+                    "series was not resolved — it is shown as not measured rather than as zero.")
+
+        # Heap is allocated inside the container, so it cannot exceed the
+        # container's resident memory.
+        pm, ph = {}, {}
+        for r in self.pod:
+            v = F(r.get("mem_mi"))
+            if v is not None:
+                pm[r["pod"]] = max(pm.get(r["pod"], 0), v)
+        for r in self.jvm:
+            v = F(r.get("heap_used_mb"))
+            if v is not None:
+                ph[r["pod"]] = max(ph.get(r["pod"], 0), v)
+        over = [p for p in ph if p in pm and ph[p] > pm[p] * 1.02]
+        if over:
+            _reject("heap above container memory", ph[over[0]])
+            self.xchecks.append(
+                f"{len(over)} pod(s) report a JVM heap larger than the container's resident "
+                "memory, which is impossible — heap lives inside that memory. The heap series is "
+                "mis-resolved for those pods.")
+            self.heap_bad = set(over)
+        else:
+            self.heap_bad = set()
+
+        # ---- did any load actually reach this cluster? ----
+        # Internal topics carry traffic whether or not a test is running:
+        # __consumer_offsets takes a commit from every idle consumer, and the
+        # strimzi.cruisecontrol.* topics are Cruise Control talking to itself. A
+        # window where only those moved recorded an idle cluster, however many
+        # MB/s the headline shows.
+        def internal(t):
+            return t.startswith("__") or t.startswith("strimzi.") or t.startswith("_schemas")
+
+        self.app_topics = []
+        tper = {}
+        for r in self.top:
+            tper.setdefault(r.get("topic", ""), []).append(r)
+        for t, rs in tper.items():
+            if internal(t):
+                continue
+            if (pk(rs, "messages_in_s") or 0) > 0 or (pk(rs, "bytes_in_mb_s") or 0) > 0:
+                self.app_topics.append(t)
+        self.idle_topics = [t for t in tper if internal(t)]
+        self.req_rated = (pk(self.lat, "req_per_s") or 0) > 0
+        # no application topic moved, and no request type had a measurable rate
+        self.no_load = bool(tper) and not self.app_topics and not self.req_rated
+
     def ser(self, rows, col, scale=1.0):
         """time series for a chart. Validated like every other read, so a
         refused value cannot set the y-axis to 2,000,000,000,000,000."""
@@ -627,9 +764,16 @@ def sec_latency(w):
         if t is None:
             cls, txt = "", "not usable — values outside any possible range"
         elif bad_split:
-            cls, txt = "", "total, queue and local are identical — the split is not measured"
+            cls, txt = "", "breakdown does not add up — the split is not measured"
         elif share is None:
             cls, txt = "", ""
+        elif not rate:
+            # Admin and quorum calls (DescribeClientQuotas, Vote, DescribeLogDirs)
+            # are made a handful of times by Cruise Control and the operator. Their
+            # queue share is arithmetically real and operationally meaningless, and
+            # a tuning recommendation hung off one would send the client chasing a
+            # setting that has nothing to do with their load.
+            cls, txt = "", "no measurable request rate — background/admin call, not load"
         elif share > 70 and q >= MATERIAL_MS:
             # A queue-dominated request on brokers that still had idle handlers
             # is not a capacity problem — recommending more brokers there would
@@ -666,12 +810,13 @@ def sec_latency(w):
                  'which series names the exporter actually publishes. <b>No conclusion about queueing is '
                  'drawn from this data.</b></div>')
         return "".join(h)
-    # Charted by traffic, not by worst time. Protocol waits like JoinGroup
-    # (which simply sits out the rebalance timeout) are the largest numbers in
-    # the table and carry almost no requests — on a shared y-axis they flatten
-    # Produce and Fetch into the baseline, hiding the latencies that matter.
-    chart_order = sorted(usable, key=lambda k: (-(pk(per[k], "req_per_s") or 0),
-                                                -(pk(per[k], "total_ms") or 0)))
+    # Charted by traffic, and ONLY requests that carried traffic. Protocol waits
+    # like JoinGroup (which simply sits out the rebalance timeout) and admin calls
+    # from Cruise Control are the largest numbers in the table while carrying no
+    # requests — on a shared y-axis they flatten Produce and Fetch into the
+    # baseline, so a chart of them shows the cluster's idle chatter, not its load.
+    carrying = [k for k in usable if (pk(per[k], "req_per_s") or 0) > 0]
+    chart_order = sorted(carrying, key=lambda k: -(pk(per[k], "req_per_s") or 0))
     series, cols = [], [S1, S2, S3, S4]
     for n, rq in enumerate(chart_order[:4]):
         pts = w.pts(per[rq], "total_ms")
@@ -681,6 +826,12 @@ def sec_latency(w):
         h.append(f'<h3>{K} total time by request type</h3>')
         h.append('<div class="chart">' + svg(series, ylab="ms", xfmt=w.xfmt()) + "</div>")
         h.append(legend([(s["name"], s["color"]) for s in series]))
+    elif usable:
+        h.append('<p class="muted"><b>No chart:</b> not one request type in this window had a '
+                 'measurable request rate. Every row above is background chatter — Cruise Control '
+                 'polling, the entity operator, KRaft quorum traffic — so there is no request '
+                 'latency to plot. If a load test was running, its traffic did not reach these '
+                 'brokers.</p>')
     return "".join(h)
 
 
@@ -789,11 +940,17 @@ def sec_infra(w):
             rc = pk(rs, "restarts")
             js = jper.get(p, [])
             rcls = "bad" if (rc or 0) > 0 else ""
+            # Where a cross-check proved the series wrong, the cell says so
+            # instead of printing a number that would be read as a measurement.
+            heap_c = ('<span class="pill mut">bad series</span>' if p in w.heap_bad
+                      else n0(pk(js, "heap_used_mb")))
+            gc_c = ('<span class="pill mut">not measured</span>' if w.gc_unmeasured
+                    else f1(pk(js, "gc_count_s"), "", 2))
             h.append(f'<tr><td class="mono">{esc(p)}</td><td class="muted">{esc(rs[-1].get("role","–"))}</td>'
                      f'<td class="mono">{esc(node)}</td><td class="num">{n0(pk(rs,"cpu_m"))}m</td>'
                      f'<td class="num">{n0(pk(rs,"mem_mi"))}</td>'
-                     f'<td class="num">{n0(pk(js,"heap_used_mb"))}</td>'
-                     f'<td class="num">{f1(pk(js,"gc_count_s"),"",2)}</td>'
+                     f'<td class="num">{heap_c}</td>'
+                     f'<td class="num">{gc_c}</td>'
                      f'<td class="num"><span class="pill {rcls}">{n0(rc)}</span></td>'
                      f'<td class="muted">{esc(rs[-1].get("ready","–"))}</td></tr>')
         h.append("</table></div>")
@@ -899,6 +1056,18 @@ def sec_raw(w):
 
 def verdict(w):
     bits, cls = [], "good"
+    # This leads, because every other figure below is a description of an idle
+    # cluster and would otherwise read as a passed load test.
+    if getattr(w, "no_load", False):
+        names = ", ".join(f'<span class="mono">{esc(t)}</span>' for t in sorted(w.idle_topics)[:4])
+        bits.append(
+            "<b>No application load reached this cluster during the window.</b> Every topic that "
+            f"moved is internal ({names}) — consumer-offset commits and Cruise Control's own "
+            "metrics — and not one request type recorded a measurable rate. The throughput and "
+            "latency figures below describe an idle Kafka cluster, not a load test, so they cannot "
+            "be used to size anything. Check that the producers were pointed at this bootstrap "
+            "address and namespace before re-running.")
+        cls = "bad"
     if w.max_off and w.max_off > 0:
         bits.append(f"<b>{n0(w.max_off)} offline partitions</b> — reads and writes to them failed, so this "
                     "window is not a valid benchmark."); cls = "bad"
@@ -909,7 +1078,13 @@ def verdict(w):
     if w.pk_in is not None:
         bits.append(f"Peak ingress <b>{f1(w.pk_in)} MB/s</b> ({n0(w.pk_msg)} msg/s), egress "
                     f"{f1(w.pk_out)} MB/s, across {len(w.brokers)} broker(s).")
-    if w.min_idle is not None:
+    if getattr(w, "idle_frozen", False) and w.min_idle is not None:
+        bits.append(f"The handler-idle series read a flat {f1(w.min_idle)}% for the whole window, "
+                    "which is a since-start average rather than a measurement of this window — "
+                    "<b>broker saturation is therefore unknown</b>, not good.")
+        if cls == "good":
+            cls = "warn"
+    elif w.min_idle is not None:
         if w.min_idle < 30:
             bits.append(f"Request handlers bottomed out at <b>{f1(w.min_idle)}% idle</b> — the brokers were "
                         "saturated and this is the ceiling for this topology.")
@@ -918,6 +1093,12 @@ def verdict(w):
             bits.append(f"Handlers bottomed out at {f1(w.min_idle)}% idle — working hard with limited headroom.")
             if cls == "good":
                 cls = "warn"
+        elif getattr(w, "no_load", False):
+            # Headroom measured against no load is not a finding. Saying a cluster
+            # has capacity to spare while nothing was asked of it is the kind of
+            # sentence a client would reasonably read as a passed test.
+            bits.append(f"Handlers sat at {f1(w.min_idle)}% idle, which only confirms the cluster "
+                        "was idle — it is not evidence of headroom under load.")
         else:
             bits.append(f"Handlers never dropped below {f1(w.min_idle)}% idle — comfortable headroom.")
     elif w.brk:
@@ -953,25 +1134,25 @@ def quality_banner(wins):
     if REJECTED:
         items = ", ".join(f"<b>{esc(k)}</b> ({v} value{'s' if v != 1 else ''})"
                           for k, v in sorted(REJECTED.items()))
-        notes.append(
-            "Some collected values were physically impossible and have been <b>refused, not "
-            f"displayed</b>: {items}. This is the signature of a JMX series resolved to a cumulative "
-            "<span class=\"mono\">_total</span> / <span class=\"mono\">_sum</span> counter where a gauge "
-            "was wanted. Everything else in this report is unaffected — the refused figures are simply "
-            "absent rather than guessed. To fix the capture, confirm the series names with "
-            "<span class=\"mono\">./perf-kafka.sh --metrics</span> and re-run on build "
-            "<span class=\"mono\">2026-10-09.4</span> or later "
-            "(<span class=\"mono\">./perf-kafka.sh --version</span>).")
+        notes.append(f"Refused as physically impossible, and therefore not displayed: {items}.")
     for w in wins:
         if getattr(w, "part_bad", False):
             notes.append(
                 f"Window <span class=\"mono\">{esc(w.tag)}</span> reported fewer partition replicas than "
                 "partition leaders, which cannot happen — every leader is itself a replica. Both figures "
                 "have been withheld.")
+        for x in getattr(w, "xchecks", []):
+            notes.append(x)
     if not notes:
         return ""
     return ('<div class="verdict bad"><b>Data quality — read this before quoting any figure.</b> '
-            + " ".join(notes) + "</div>")
+            'The checks below compare each series against what is arithmetically or physically '
+            'possible, and against the other series measuring the same thing. Where a figure failed, '
+            'it is absent rather than guessed; nothing else in the report is affected.'
+            '<ul style="margin:9px 0 2px;padding-left:20px">'
+            + "".join(f"<li style=\"margin:4px 0\">{n}</li>" for n in notes)
+            + '</ul>To chase these down, list what the exporter actually publishes with '
+            '<span class="mono">./perf-kafka.sh --metrics &lt;pattern&gt;</span>.</div>')
 
 
 def build(wins):

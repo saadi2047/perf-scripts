@@ -177,3 +177,107 @@
    --------------------------------------------------------------
 ERROR: no Kafka broker pods found in namespace perf-kafka
 [osuser@bastion perf-kafka]$
+==================================================================================
+   PERF-KAFKA — 2026-10-09 18:02:43 IST    cycle 10s set / 32s actual    ns=perf-kafka    tag=1758
+   elapsed 3m16s    REMAINING 0m00s     ends ~18:02:27 IST   sample 6/6
+   [########################################] 100%
+   window start 2026-10-09 17:59:27 IST
+==================================================================================
+  [1] CLUSTER HEALTH
+  ----------------------------------------------------------------------------------
+      active controllers                    1   OK quorum has one leader
+      offline partitions                    0   OK none
+      under-replicated                      0   OK all replicas in sync
+      unclean elections/s               0.000   OK none
+      partitions / leaders                473 / 163
+      throughput                         0.05 MB/s in   0.00 MB/s out   340 msg/s
+
+  [2] BROKERS   (idle% is the saturation signal: <30% = request handlers starved)
+  ----------------------------------------------------------------------------------
+  BROKER                        MB/s in MB/s out    msg/s hnd idle net idle  reqQ   purg  URP  part  lead
+  -------------------------------------------------------------------------------------------------------
+  perf-kafka-cluster-broker-0      0.01     0.00       90    98.9%    93.1%     0  16958    0   157    53
+  perf-kafka-cluster-broker-1      0.00     0.00        0    99.8%    99.9%     0   5194    0   157    55
+  perf-kafka-cluster-broker-2      0.04     0.00      251    88.0%    50.1%     0  14054    0   159    55
+      leader balance: max/min 1.04x (even)
+
+  [3] REQUEST LATENCY  (p99 ms, by request type)
+  ----------------------------------------------------------------------------------
+  REQUEST                   total ms  queue ms  local ms     req/s
+  JoinGroup                  43287.0       5.0       6.0         0
+  Vote                       28957.3       0.0       0.0         0
+  EndQuorumEpoch             23376.0       0.0       0.0         0
+  DescribeLogDirs            16961.4   16901.0   16961.2         0
+  ListOffsets                11865.8       3.9       1.0         0
+  DescribeClientQuotas       10352.4   10350.3       0.0         0
+  FindCoordinator             7158.4    7158.1       0.0         0
+  DescribeUse~Credentials     5712.2    5710.7       0.0         0
+      NOTE: no request type had a measurable rate — every row above is
+      background chatter (Cruise Control, the operator, KRaft quorum).
+      These are not load-test latencies and imply nothing about capacity.
+
+  [4] TOP TOPICS BY INGRESS
+  ----------------------------------------------------------------------------------
+  TOPIC                                        MB/s in  MB/s out     msg/s
+  __consumer_offsets                             0.046     0.000       329
+  strimzi.cruisecontrol.metrics                  0.000     0.000         9
+  strimzi.cruisecontro~rtitionmetricsamples      0.000     0.000         2
+  strimzi.cruisecontro~modeltrainingsamples      0.000     0.000         0
+  transaction_push_verification_topic            0.000     0.000         0
+
+  [5] PODS   (placement, resources, JVM)
+  ----------------------------------------------------------------------------------
+  POD                           ROLE        NODE              RDY  RST     CPU   MEM Mi  heap Mi   GC/s
+  perf-kafka-cluster-broker-0   broker      kafbroker1        1/1    0    304m     8697     4978      -
+  perf-kafka-cluster-broker-1   broker      kafbroker3        1/1    0    137m     8392     6182      -
+  perf-kafka-cluster-broker-2   broker      kafbroker2        1/1    0    487m    12638     3737      -
+  perf-kafka-clu~r-controller-3 controller  kafbroker3        1/1    0    111m     3229     1154      -
+  perf-kafka-clu~r-controller-4 controller  kafbroker1        1/1    0     20m     3243     2213      -
+  perf-kafka-clu~r-controller-5 controller  kafbroker2        1/1    0    123m     4229     2088      -
+  perf-kafka-clu~889b47d8-kkq8v cruise-ctl  worker4           1/1    3     24m     1640        -      -
+  perf-kafka-clu~4578cbfd-r5kg8 entity-op   worker5           2/2    0      9m      949       75      -
+
+  [6] STORAGE
+  ----------------------------------------------------------------------------------
+  PVC                                            used GB   size GB   used %
+  data-0-perf-kafka-cluster-broker-1                 5.1     107.4     4.8%
+  data-0-perf-kafka-cluster-broker-0                 4.5     107.4     4.2%
+  data-1-perf-kafka-cluster-broker-2                 4.4     107.4     4.1%
+  data-0-perf-kafka-cluster-broker-2                 3.3     107.4     3.1%
+  data-1-perf-kafka-cluster-broker-0                 3.2     107.4     3.0%
+  data-1-perf-kafka-cluster-broker-1                 1.9     107.4     1.8%
+  data-0-perf-kafka-cluster-controller-5             0.0     107.4     0.0%
+  data-0-perf-kafka-cluster-controller-4             0.0     107.4     0.0%
+  data-0-perf-kafka-cluster-controller-3             0.0     107.4     0.0%
+==================================================================================
+   0m00s remaining (ends ~18:02:27 IST)   |   Ctrl-C to stop early and still get the report
+   CSVs: /home/osuser/saadi/M/Muzzammil/perf-kafka/kafka-test-20261009_175851/kafka_*_1758.csv
+[*] requested 180s reached — no further samples will start.
+
+==================================================================================
+   PERF-KAFKA WINDOW SUMMARY   (tag: 1758, namespace: perf-kafka)
+==================================================================================
+   START / END (IST) : 2026-10-09 17:59:27  ->  2026-10-09 18:02:54
+   DURATION          : 207s (3.5 min) over 6 samples   (requested 180s; the final sample was allowed to finish)
+   BROKERS           : 3
+   PEAK THROUGHPUT   : in 0.05 MB/s   out 0.00 MB/s   351 msg/s
+   WORST HANDLER IDLE: 83.0%   (under 30% = brokers saturated)
+   MAX UNDER-REPL    : 0   (must return to 0)
+   MAX CONSUMER LAG  : 0
+==================================================================================
+   CSVs in /home/osuser/saadi/M/Muzzammil/perf-kafka/kafka-test-20261009_175851  (tag 1758)
+
+[*] building the HTML report...
+  [window] 1758: 6 samples, 3 brokers, peak in 0.046 MB/s
+[kafka-report] wrote /home/osuser/saadi/M/Muzzammil/perf-kafka/kafka-test-20261009_175851/KAFKA_Report_20261009_180254.html
+
+  [data quality] figures the validators refused — not shown in the HTML:
+      - Refused as physically impossible, and therefore not displayed: queue + local above total (2
+        values), queue equals total with zero local time (8 values).
+      - 6 of 8 request types report a latency that is byte-identical in every sample. Kafka's
+        request timers use decaying reservoirs that drift towards a since-broker-start figure, so
+        these are not this window's percentiles. The latency column is labelled accordingly and no
+        capacity conclusion is drawn from it.
+      list what the exporter publishes with: ./perf-kafka.sh --metrics <pattern>
+[OK] REPORT: /home/osuser/saadi/M/Muzzammil/perf-kafka/kafka-test-20261009_175851/KAFKA_Report_20261009_180254.html
+[osuser@bastion perf-kafka]$

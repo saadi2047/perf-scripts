@@ -11,11 +11,11 @@
 # recomputed here from the rows so the report never depends on a summary line.
 # A metric the JMX exporter never published stays blank — it is never shown as 0.
 # ============================================================================
-import os, csv, argparse, datetime, statistics as st
+import os, re, csv, argparse, datetime, textwrap, statistics as st
 
 # Bumped whenever the report's judgement changes, so a file can always be traced
 # to the build that produced it. Printed in the masthead and by --version.
-KR_VERSION = "2026-10-09.7  (frozen-series verdicts + at-min-ISR check)"
+KR_VERSION = "2026-10-09.9  (data-quality notes to console, not the page)"
 
 def read(p):
     if not p or not os.path.exists(p):
@@ -38,6 +38,18 @@ def n0(v):
 def f1(v, s="", d=1):
     f = F(v)
     return "–" if f is None else f"{f:,.{d}f}{s}"
+
+
+def fv(v, s=""):
+    """Throughput at adaptive precision. A real 0.046 MB/s printed at one
+    decimal becomes "0.0 MB/s", which a reader takes to mean no traffic at
+    all — the opposite of what was measured."""
+    f = F(v)
+    if f is None:
+        return "–"
+    a = abs(f)
+    d = 1 if (a >= 1 or a == 0) else (2 if a >= 0.1 else 3)
+    return f"{f:,.{d}f}{s}"
 
 def esc(t):
     return str(t).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -395,7 +407,11 @@ class Win:
         self.have_ctl = bool(ctl)
         self.min_idle = mn(self.brk, "handler_idle_pct")
         self.min_net = mn(self.brk, "network_idle_pct")
-        self.max_atminisr = pk(self.brk, "at_min_isr")
+        # At-min-ISR is a COUNT OF PARTITIONS each broker leads, so the cluster
+        # figure is the sum across brokers — exactly like leaders, and unlike
+        # idle % or queue depth where the worst single broker is what matters.
+        # Taking the max reported 4 where the cluster actually had 8.
+        self.max_atminisr = self.peak_of_sum(self.brk, "at_min_isr")
         self.max_reqq = pk(self.brk, "request_queue")
         self.max_purg = pk(self.brk, "purgatory")
         self.max_lag = None
@@ -413,7 +429,28 @@ class Win:
         else:
             self.lag_pts = []
         self.max_pvc = pk(self.dsk, "used_pct")
-        self.restarts = pk(self.pod, "restarts")
+        # `restarts` is a lifetime pod counter, not a window event count. The
+        # old `pk()` reported cruise-control's 3 restarts from 41 hours earlier
+        # as "3 pod restart(s) during the window", which is simply false.
+        # The window figure is last-minus-first per pod.
+        self.restarts = pk(self.pod, "restarts")          # lifetime, worst pod
+        pr = {}
+        for r in self.pod:
+            v = one(r, "restarts")
+            if v is None:
+                continue
+            e = F(r.get("elapsed_s"), 0) or 0
+            p = r.get("pod", "")
+            lo, hi = pr.get(p, (None, None))
+            if lo is None or e <= lo[0]:
+                lo = (e, v)
+            if hi is None or e >= hi[0]:
+                hi = (e, v)
+            pr[p] = (lo, hi)
+        self.restarts_in_window = sum(max(0.0, hi[1] - lo[1]) for lo, hi in pr.values()) if pr else None
+        self.restarts_pre = sum(lo[1] for lo, _ in pr.values()) if pr else None
+        self.restart_pods = sorted(p for p, (lo, hi) in pr.items() if hi[1] - lo[1] > 0)
+        self.restart_pods_pre = sorted(p for p, (lo, _) in pr.items() if lo[1] > 0)
         # Replica count below leader count is arithmetically impossible: every
         # leader IS a replica. 8 partitions / 163 leaders means the partition
         # series was mis-resolved, so neither figure may be quoted.
@@ -435,14 +472,20 @@ class Win:
         # threads really were starved, the handlers would be starved too — so
         # abundant handler headroom beside a starved network pool means one of
         # the two series is not what it claims to be.
+        self.net_bad = False
         if (self.min_idle is not None and self.min_idle >= 50
                 and self.min_net is not None and self.min_net < 30):
+            # Without a banner on the page to caveat it, a number we cannot
+            # vouch for must not be printed at all — the rest of the report
+            # refuses rather than annotates, and this follows the same rule.
+            self.net_bad = True
             self.xchecks.append(
                 f"Request handlers report {f1(self.min_idle)}% idle while the network "
                 f"processors report {f1(self.min_net)}% idle. Those two pools feed each other, so "
                 "one cannot sit nearly idle while the other is starved — one of the two series is "
-                "mis-resolved. The handler figure is the one the saturation verdict uses, so treat "
-                "the network-idle column as unverified.")
+                "mis-resolved. The network-idle column has been blanked; the handler figure is the "
+                "one the saturation verdict uses.")
+            self.min_net = None
 
         # Kafka's RequestHandlerAvgIdlePercent is a Meter, and the JMX exporter
         # publishes its mean-since-broker-start alongside the 1/5/15-minute
@@ -539,6 +582,21 @@ class Win:
         # no application topic moved, and no request type had a measurable rate
         self.no_load = bool(tper) and not self.app_topics and not self.req_rated
 
+    @staticmethod
+    def peak_of_sum(rows, col):
+        """For a per-broker COUNT: sum across brokers within each sample, then
+        take the peak of those sums. Summing the per-broker peaks instead would
+        overstate it, and taking the max of one broker would understate it."""
+        per = {}
+        seen = False
+        for r in rows:
+            v = one(r, col)
+            if v is None:
+                continue
+            seen = True
+            per[r.get("ts_ist", "")] = per.get(r.get("ts_ist", ""), 0.0) + v
+        return max(per.values()) if (seen and per) else None
+
     def ser(self, rows, col, scale=1.0):
         """time series for a chart. Validated like every other read, so a
         refused value cannot set the y-axis to 2,000,000,000,000,000."""
@@ -595,11 +653,26 @@ def sec_health(w):
     # At-min-ISR is a different question from under-replicated and a sharper one:
     # these partitions are IN sync, but with exactly min.insync.replicas members.
     # URP stays 0 while one more replica loss stops writes to them outright.
+    # With under-replicated at zero, every partition's ISR already equals its
+    # replication factor — so a partition that is ALSO at min ISR has no spare
+    # replica at all, and the shortfall is in how it was created, not in
+    # anything that happened during this window.
+    no_spare = (w.max_urp is not None and w.max_urp == 0
+                and w.max_atminisr is not None and w.max_atminisr > 0)
+    atmin_bad = ("these partitions sit at exactly min.insync.replicas, and with no under-replicated "
+                 "partitions their in-sync set already equals their replication factor — so they have "
+                 "<b>no spare replica</b>. Losing one broker takes them below min.insync.replicas and "
+                 "<span class=\"mono\">acks=all</span> producers get NOT_ENOUGH_REPLICAS. Check them with "
+                 "<span class=\"mono\">kafka-topics.sh --describe --at-min-isr-partitions</span>; the usual "
+                 "cause is a topic created with a replication factor below its own "
+                 "<span class=\"mono\">min.insync.replicas</span>."
+                 if no_spare else
+                 "these partitions sit at exactly min.insync.replicas — one more replica loss and "
+                 "<span class=\"mono\">acks=all</span> producers get NOT_ENOUGH_REPLICAS on them")
     rows.append(("At min ISR (peak)", w.max_atminisr,
                  (w.max_atminisr == 0) if w.max_atminisr is not None else None,
                  "every partition had spare in-sync replicas above the minimum",
-                 "these partitions sit at exactly min.insync.replicas — one more "
-                 "replica loss and producers get NOT_ENOUGH_REPLICAS on them"))
+                 atmin_bad))
     h.append('<div class="tbl-wrap"><table><tr><th>Check</th><th class="num">Worst value</th>'
              '<th>Verdict</th><th>Reading</th></tr>')
     for name, val, ok, oktxt, badtxt in rows:
@@ -624,8 +697,8 @@ def sec_window(w):
     h.append(kpi("Duration", f"{f1((w.dur or 0)/60)} min", "", f"{w.samples} samples"))
     h.append(kpi("Brokers", str(len(w.brokers)) or "–", "",
                  f"{len(w.ctrls)} controller(s)" if w.ctrls else "combined roles"))
-    h.append(kpi("Peak ingress", f1(w.pk_in, " MB/s", 1), "", f"avg {f1(w.av_in,' MB/s')}"))
-    h.append(kpi("Peak egress", f1(w.pk_out, " MB/s", 1), "", f"avg {f1(w.av_out,' MB/s')}"))
+    h.append(kpi("Peak ingress", fv(w.pk_in, " MB/s"), "", f"avg {fv(w.av_in,' MB/s')}"))
+    h.append(kpi("Peak egress", fv(w.pk_out, " MB/s"), "", f"avg {fv(w.av_out,' MB/s')}"))
     h.append(kpi("Peak messages", f1(w.pk_msg, "/s", 0), "", f"avg {f1(w.av_msg,'/s',0)}"))
     if w.min_idle is None:
         h.append(kpi("Worst handler idle", "not measured", "",
@@ -678,7 +751,8 @@ def sec_brokers(w):
     for b in sorted(per):
         rs = per[b]
         i_, o_, m_ = pk(rs, "bytes_in_mb_s"), pk(rs, "bytes_out_mb_s"), pk(rs, "messages_in_s")
-        hi, ni = mn(rs, "handler_idle_pct"), mn(rs, "network_idle_pct")
+        hi = mn(rs, "handler_idle_pct")
+        ni = None if w.net_bad else mn(rs, "network_idle_pct")
         q, pu = pk(rs, "request_queue"), pk(rs, "purgatory")
         u, le = pk(rs, "under_replicated"), pk(rs, "leaders")
         # "healthy headroom" must never be the fallback for a missing figure.
@@ -703,14 +777,14 @@ def sec_brokers(w):
         T["q"] = max(T["q"], q or 0); T["p"] = max(T["p"], pu or 0)
         T["u"] = max(T["u"], u or 0); T["l"] += le or 0
         pill = f'<span class="pill {cls}">{f1(hi,"%")}</span>' if hi is not None else '<span class="pill mut">–</span>'
-        h.append(f'<tr><td class="mono">{esc(b)}</td><td class="num">{f1(i_)}</td>'
-                 f'<td class="num">{f1(o_)}</td><td class="num">{n0(m_)}</td>'
+        h.append(f'<tr><td class="mono">{esc(b)}</td><td class="num">{fv(i_)}</td>'
+                 f'<td class="num">{fv(o_)}</td><td class="num">{n0(m_)}</td>'
                  f'<td class="num">{pill}</td><td class="num">{f1(ni,"%")}</td>'
                  f'<td class="num">{n0(q)}</td><td class="num">{n0(pu)}</td>'
                  f'<td class="num">{n0(u)}</td><td class="num">{n0(le)}</td>'
                  f'<td class="muted">{txt}</td></tr>')
     h.append(f'<tr class="tot"><td>CLUSTER <span class="muted">({len(per)} brokers)</span></td>'
-             f'<td class="num">{f1(T["i"])}</td><td class="num">{f1(T["o"])}</td>'
+             f'<td class="num">{fv(T["i"])}</td><td class="num">{fv(T["o"])}</td>'
              f'<td class="num">{n0(T["m"])}</td><td class="num">{f1(w.min_idle,"%")}</td>'
              f'<td class="num">{f1(w.min_net,"%")}</td><td class="num">{n0(T["q"])}</td>'
              f'<td class="num">{n0(T["p"])}</td><td class="num">{n0(T["u"])}</td>'
@@ -951,7 +1025,7 @@ def sec_infra(w):
         h.append('<div class="tbl-wrap"><table><tr><th>Pod</th><th>Role</th><th>Node</th>'
                  '<th class="num">CPU pk</th><th class="num">Mem pk Mi</th>'
                  '<th class="num">Heap pk Mi</th><th class="num">GC/s pk</th>'
-                 '<th class="num">Restarts</th><th>Ready</th></tr>')
+                 '<th class="num">Restarts<br><span style="font-weight:400;text-transform:none">(pod lifetime)</span></th><th>Ready</th></tr>')
         jper = {}
         for r in w.jvm:
             jper.setdefault(r["pod"], []).append(r)
@@ -960,7 +1034,9 @@ def sec_infra(w):
             node = rs[-1].get("node", "–")
             rc = pk(rs, "restarts")
             js = jper.get(p, [])
-            rcls = "bad" if (rc or 0) > 0 else ""
+            # red only when the pod restarted inside this window; an older
+            # restart still on the counter is context, not a window event
+            rcls = ("bad" if p in w.restart_pods else ("warn" if (rc or 0) > 0 else ""))
             # Where a cross-check proved the series wrong, the cell says so
             # instead of printing a number that would be read as a measurement.
             heap_c = ('<span class="pill mut">bad series</span>' if p in w.heap_bad
@@ -1097,8 +1173,8 @@ def verdict(w):
     if w.ctl_bad:
         bits.append(f"The controller count left 1 on {len(w.ctl_bad)} sample(s)."); cls = "bad"
     if w.pk_in is not None:
-        bits.append(f"Peak ingress <b>{f1(w.pk_in)} MB/s</b> ({n0(w.pk_msg)} msg/s), egress "
-                    f"{f1(w.pk_out)} MB/s, across {len(w.brokers)} broker(s).")
+        bits.append(f"Peak ingress <b>{fv(w.pk_in)} MB/s</b> ({n0(w.pk_msg)} msg/s), egress "
+                    f"{fv(w.pk_out)} MB/s, across {len(w.brokers)} broker(s).")
     if getattr(w, "idle_frozen", False) and w.min_idle is not None:
         bits.append(f"The handler-idle series read a flat {f1(w.min_idle)}% for the whole window, "
                     "which is a since-start average rather than a measurement of this window — "
@@ -1135,8 +1211,16 @@ def verdict(w):
             cls = "warn"
     if w.max_lag is not None and w.max_lag > 0:
         bits.append(f"Peak consumer lag {n0(w.max_lag)} messages.")
-    if w.restarts:
-        bits.append(f"{n0(w.restarts)} pod restart(s) during the window.")
+    if w.restarts_in_window:
+        who = ", ".join(f"<span class=\"mono\">{esc(p)}</span>" for p in w.restart_pods[:3])
+        bits.append(f"<b>{n0(w.restarts_in_window)} pod restart(s) DURING this window</b> ({who}) — "
+                    "the figures either side of a restart describe different processes.")
+        if cls == "good":
+            cls = "warn"
+    elif w.restarts_pre:
+        who = ", ".join(f"<span class=\"mono\">{esc(p)}</span>" for p in w.restart_pods_pre[:3])
+        bits.append(f"No pod restarted during the window; {n0(w.restarts_pre)} earlier restart(s) "
+                    f"are still on the counter ({who}).")
         if cls == "good":
             cls = "warn"
     if w.max_pvc:
@@ -1147,10 +1231,19 @@ def verdict(w):
     return cls, " ".join(bits)
 
 
-def quality_banner(wins):
-    """Rendered only when something was refused. It names what was thrown away
-    and how to fix the collector, so a thin report is never mistaken for a
-    healthy cluster."""
+def quality_notes(wins):
+    """What the validators refused, and why.
+
+    This used to render as a red block at the top of the page. It is now printed
+    to the console when the report is built instead: the detail is for whoever
+    ran the capture, not for the client reading the report.
+
+    Nothing about the VALIDATION changed — impossible values are still refused
+    and no conclusion is drawn from them. What changed is only where the
+    explanation goes. Where a suppressed figure would otherwise leave a bare
+    number on the page looking like a measurement, the cell itself is blanked
+    rather than annotated, so the page stays clean without being misleading.
+    """
     notes = []
     if REJECTED:
         items = ", ".join(f"<b>{esc(k)}</b> ({v} value{'s' if v != 1 else ''})"
@@ -1164,16 +1257,7 @@ def quality_banner(wins):
                 "have been withheld.")
         for x in getattr(w, "xchecks", []):
             notes.append(x)
-    if not notes:
-        return ""
-    return ('<div class="verdict bad"><b>Data quality — read this before quoting any figure.</b> '
-            'The checks below compare each series against what is arithmetically or physically '
-            'possible, and against the other series measuring the same thing. Where a figure failed, '
-            'it is absent rather than guessed; nothing else in the report is affected.'
-            '<ul style="margin:9px 0 2px;padding-left:20px">'
-            + "".join(f"<li style=\"margin:4px 0\">{n}</li>" for n in notes)
-            + '</ul>To chase these down, list what the exporter actually publishes with '
-            '<span class="mono">./perf-kafka.sh --metrics &lt;pattern&gt;</span>.</div>')
+    return [re.sub(r"<[^>]+>", "", n) for n in notes]
 
 
 def build(wins):
@@ -1225,7 +1309,6 @@ def build(wins):
         vc, vt = verdict(w)
         body.append(f'<div class="verdict {vc}"><b>Summary.</b> {vt}</div>')
         body.extend(secs)
-    H.append(quality_banner(wins))
     H.extend(body)
     H.append('<p class="muted" style="text-align:center;margin-top:40px;border-top:1px solid var(--line);'
              'padding-top:14px">© Saadi M Muzzammil · read-only · generated from perf-kafka.sh CSVs.</p>')
@@ -1268,6 +1351,17 @@ def main():
     with open(a.o, "w") as f:
         f.write(build(wins))
     print(f"[kafka-report] wrote {a.o}")
+    # The data-quality detail goes here rather than onto the page. It is for
+    # whoever ran the capture; the client just sees a report with no made-up
+    # figures in it. Build the notes AFTER build(), so every validator has run.
+    notes = quality_notes(wins)
+    if notes:
+        print()
+        print("  [data quality] figures the validators refused — not shown in the HTML:")
+        for n in notes:
+            for i, line in enumerate(textwrap.wrap(n, 92)):
+                print(("      - " if i == 0 else "        ") + line)
+        print("      list what the exporter publishes with: ./perf-kafka.sh --metrics <pattern>")
 
 
 if __name__ == "__main__":

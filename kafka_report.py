@@ -13,6 +13,10 @@
 # ============================================================================
 import os, csv, argparse, datetime, statistics as st
 
+# Bumped whenever the report's judgement changes, so a file can always be traced
+# to the build that produced it. Printed in the masthead and by --version.
+KR_VERSION = "2026-10-09.5  (input validation + honest verdicts)"
+
 def read(p):
     if not p or not os.path.exists(p):
         return []
@@ -41,22 +45,109 @@ def esc(t):
 def short_ts(t):
     return (t or "").split(" ")[-1] or "–"
 
+S1, S2, S3, S4, S5 = "#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4"
+
+# ---------------------------------------------------------------- sanity ----
+# The report does not trust its input. A collector that resolved a cumulative
+# counter where a gauge was wanted will hand over an idle percentage of
+# 1,877,290,000,000,000 — and a report that renders that as "healthy headroom"
+# is worse than one that renders nothing. Physically impossible values are
+# rejected here and listed to the reader, never quietly passed through.
+REJECTED = {}
+
+
+def _reject(kind, val):
+    REJECTED[kind] = REJECTED.get(kind, 0) + 1
+    return None
+
+
+def pct_ok(v):
+    """a percentage must be 0..100"""
+    if v is None:
+        return None
+    return v if -0.01 <= v <= 100.5 else _reject("idle/percentage", v)
+
+
+# A Kafka request Max can legitimately reach tens of seconds (JoinGroup waits
+# out the rebalance timeout). An hour cannot happen: that is a counter.
+LAT_CEILING_MS = 3_600_000
+
+# Below this, the queue-vs-local split is real but not worth acting on: a 73%
+# queue share of a 4 ms request is scheduling noise, not a bottleneck.
+MATERIAL_MS = 20.0
+
+
+def ms_ok(v):
+    if v is None:
+        return None
+    return v if 0 <= v <= LAT_CEILING_MS else _reject("request latency", v)
+
+
+def nonneg(v):
+    if v is None:
+        return None
+    return v if v >= 0 else _reject("negative value", v)
+
+
+def lat_incoherent(t, q, l):
+    """Queue time and local time are disjoint phases of one request: each is a
+    PART of total time. If all three carry the same value then one series was
+    resolved three times, and the queue-vs-local split — the entire point of
+    this section — is not being measured at all. This catches a mis-resolved
+    series at any magnitude, where a ceiling only catches the gross ones."""
+    if t is None or q is None or l is None or t <= 0:
+        return False
+    same = abs(q - t) / t < 0.01 and abs(l - t) / t < 0.01
+    if same:
+        _reject("latency queue/local split", t)
+    return same
+
+
+# per-column validator, applied wherever that column is read
+_VALID = {"handler_idle_pct": pct_ok, "network_idle_pct": pct_ok,
+          "used_pct": pct_ok, "total_ms": ms_ok, "queue_ms": ms_ok,
+          "local_ms": ms_ok}
+
+
+def _vals(rows, col):
+    """every numeric column is read through here, so a value that cannot be
+    physically true never reaches a peak, a mean, a chart or a verdict."""
+    f = _VALID.get(col)
+    out = []
+    for r in rows:
+        x = F(r.get(col))
+        if x is None:
+            continue
+        if f:
+            x = f(x)
+            if x is None:
+                continue
+        out.append(x)
+    return out
+
+
+def one(row, col):
+    """single-cell read, validated the same way as the aggregates"""
+    x = F(row.get(col))
+    if x is None:
+        return None
+    f = _VALID.get(col)
+    return f(x) if f else x
+
+
 def pk(rows, col):
-    v = [F(r.get(col)) for r in rows]
-    v = [x for x in v if x is not None]
+    v = _vals(rows, col)
     return max(v) if v else None
 
+
 def mn(rows, col):
-    v = [F(r.get(col)) for r in rows]
-    v = [x for x in v if x is not None]
+    v = _vals(rows, col)
     return min(v) if v else None
 
-def av(rows, col):
-    v = [F(r.get(col)) for r in rows]
-    v = [x for x in v if x is not None]
-    return st.mean(v) if v else None
 
-S1, S2, S3, S4, S5 = "#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4"
+def av(rows, col):
+    v = _vals(rows, col)
+    return st.mean(v) if v else None
 
 CSS = """<style>
 /* Theme: "broker" — charcoal chrome, amber accent. Deliberately distinct from the
@@ -104,10 +195,13 @@ border-radius:2px;padding:15px 19px;margin:16px 0;font-size:14.5px;box-shadow:va
 .verdict.bad{border-left-color:var(--bad-ink)}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(176px,1fr));gap:10px;margin:14px 0}
 .kpi{background:var(--card);border:1px solid var(--line);border-top:3px solid var(--accent);
-border-radius:2px;padding:13px 15px 14px;box-shadow:var(--shadow)}
+border-radius:2px;padding:13px 15px 14px;box-shadow:var(--shadow);min-width:0;overflow:hidden}
 .kpi .lbl{font-size:10.5px;color:var(--mut);text-transform:uppercase;letter-spacing:.1em;
 font-family:ui-monospace,Menlo,Consolas,monospace}
-.kpi .val{font-size:22px;font-weight:650;margin-top:5px;letter-spacing:-.02em}
+/* min-width:0 + wrapping stop one absurd value from widening the grid track
+   and giving the whole page a horizontal scrollbar. */
+.kpi .val{font-size:22px;font-weight:650;margin-top:5px;letter-spacing:-.02em;
+min-width:0;overflow-wrap:anywhere;word-break:break-word}
 .kpi .val.good{color:var(--good-ink)}.kpi .val.warn{color:var(--warn-ink)}.kpi .val.bad{color:var(--bad-ink)}
 .kpi .val.sm{font-size:16px;letter-spacing:0;line-height:1.35}
 .kpi .sub{font-size:11.5px;color:var(--mut);margin-top:3px;line-height:1.4}
@@ -236,6 +330,22 @@ def kpi(lbl, val, cls="", sub=""):
 class Win:
     def __init__(self, tag, d):
         self.tag = tag
+        # run_info.txt is written by the collector. It carries the build identity
+        # and — critically — whether the latency series are real percentiles or
+        # Max-since-start, so the report never labels a Max as a p99.
+        self.info = {}
+        ri = os.path.join(d, "run_info.txt")
+        if os.path.exists(ri):
+            try:
+                with open(ri) as fh:
+                    for ln in fh:
+                        if "=" in ln:
+                            k, v = ln.split("=", 1)
+                            self.info[k.strip()] = v.strip()
+            except OSError:
+                pass
+        self.lat_kind = self.info.get("latency_kind", "")
+        self.lat_label = {"p99": "p99", "max": "max"}.get(self.lat_kind, "peak")
         g = lambda n: read(os.path.join(d, f"kafka_{n}_{tag}.csv"))
         self.clu, self.brk, self.top = g("cluster"), g("broker"), g("topic")
         self.lat, self.jvm, self.pod = g("latency"), g("jvm"), g("pod")
@@ -280,16 +390,38 @@ class Win:
             self.lag_pts = []
         self.max_pvc = pk(self.dsk, "used_pct")
         self.restarts = pk(self.pod, "restarts")
+        # Replica count below leader count is arithmetically impossible: every
+        # leader IS a replica. 8 partitions / 163 leaders means the partition
+        # series was mis-resolved, so neither figure may be quoted.
+        self.parts_tot = pk(c, "partitions_total")
+        self.leads_tot = pk(c, "leaders_total")
+        self.part_bad = (self.parts_tot is not None and self.leads_tot is not None
+                         and self.leads_tot > 0 and self.parts_tot < self.leads_tot)
+        if self.part_bad:
+            _reject("partition / leader counts", self.parts_tot)
+            self.parts_tot = None
 
     def ser(self, rows, col, scale=1.0):
+        """time series for a chart. Validated like every other read, so a
+        refused value cannot set the y-axis to 2,000,000,000,000,000."""
         out = {}
         for r in rows:
-            v = F(r.get(col))
+            v = one(r, col)
             if v is None:
                 continue
             e = F(r.get("elapsed_s"), 0) or 0
             out[e] = out.get(e, 0.0) + v * scale
         return sorted(out.items())
+
+    def pts(self, rows, col):
+        """per-row points, validated, no summing — for one-entity series"""
+        out = []
+        for r in rows:
+            v = one(r, col)
+            if v is None:
+                continue
+            out.append((F(r.get("elapsed_s"), 0) or 0, v))
+        return sorted(out)
 
     def xfmt(self):
         dur = self.dur or 1
@@ -348,10 +480,13 @@ def sec_window(w):
     h.append(kpi("Peak ingress", f1(w.pk_in, " MB/s", 1), "", f"avg {f1(w.av_in,' MB/s')}"))
     h.append(kpi("Peak egress", f1(w.pk_out, " MB/s", 1), "", f"avg {f1(w.av_out,' MB/s')}"))
     h.append(kpi("Peak messages", f1(w.pk_msg, "/s", 0), "", f"avg {f1(w.av_msg,'/s',0)}"))
-    idle_cls = "bad" if (w.min_idle is not None and w.min_idle < 30) else (
-        "warn" if (w.min_idle is not None and w.min_idle < 50) else "good")
-    h.append(kpi("Worst handler idle", f1(w.min_idle, "%"), idle_cls if w.min_idle is not None else "",
-                 "under 30% = handlers starved"))
+    if w.min_idle is None:
+        h.append(kpi("Worst handler idle", "not measured", "",
+                     "no usable idle series — see data quality"))
+    else:
+        idle_cls = "bad" if w.min_idle < 30 else ("warn" if w.min_idle < 50 else "good")
+        h.append(kpi("Worst handler idle", f1(w.min_idle, "%"), idle_cls,
+                     "under 30% = handlers starved"))
     if w.max_lag is not None:
         h.append(kpi("Peak consumer lag", n0(w.max_lag),
                      "warn" if w.max_lag > 0 else "good", "summed across all groups"))
@@ -393,11 +528,15 @@ def sec_brokers(w):
         hi, ni = mn(rs, "handler_idle_pct"), mn(rs, "network_idle_pct")
         q, pu = pk(rs, "request_queue"), pk(rs, "purgatory")
         u, le = pk(rs, "under_replicated"), pk(rs, "leaders")
-        if hi is not None and hi < 30:
-            cls, txt = "bad", "saturated — handlers starved"
-        elif (u or 0) > 0:
+        # "healthy headroom" must never be the fallback for a missing figure.
+        # An absent or refused idle percentage is unknown, not good.
+        if (u or 0) > 0:
             cls, txt = "bad", "replicas fell behind on this broker"
-        elif hi is not None and hi < 50:
+        elif hi is None:
+            cls, txt = "", "handler idle not measured — saturation unknown"
+        elif hi < 30:
+            cls, txt = "bad", "saturated — handlers starved"
+        elif hi < 50:
             cls, txt = "warn", "working hard, little headroom"
         else:
             cls, txt = "good", "healthy headroom"
@@ -426,8 +565,7 @@ def sec_brokers(w):
     # idle chart
     series, cols = [], [S1, S2, S3, S4, S5]
     for n, b in enumerate(sorted(per)[:5]):
-        pts = [(F(r["elapsed_s"], 0) or 0, F(r["handler_idle_pct"]))
-               for r in per[b] if F(r.get("handler_idle_pct")) is not None]
+        pts = w.pts(per[b], "handler_idle_pct")
         if pts:
             series.append({"name": "-".join(b.split("-")[-2:]), "color": cols[n % 5], "pts": pts})
     if series:
@@ -460,36 +598,87 @@ def sec_latency(w):
              'thread) and <b>local time</b> (actually doing the work). The split is the diagnosis: queue '
              'time dominating means the brokers are <i>backed up</i> and need more capacity or partitions; '
              'local time dominating means each operation is genuinely slow — disk, or too-large batches.</p>')
-    h.append('<div class="tbl-wrap"><table><tr><th>Request</th><th class="num">p99 total ms</th>'
+    K = w.lat_label
+    if w.lat_kind == "max":
+        h.append('<div class="verdict warn"><b>These are Max-since-broker-start, not percentiles.</b> '
+                 'The JMX exporter on this cluster publishes no <span class="mono">quantile</span> labels, '
+                 'so the only latency figure available is the single worst request each broker has served '
+                 'since it booted. A Max of tens of seconds is normal for <span class="mono">JoinGroup</span> '
+                 '(it waits out the rebalance timeout) and says nothing about typical latency. Treat this '
+                 'section as an outlier check, not a latency profile — add quantile rules to the exporter '
+                 'config to get a real p99.</div>')
+    h.append(f'<div class="tbl-wrap"><table><tr><th>Request</th><th class="num">{K} total ms</th>'
              '<th class="num">queue ms</th><th class="num">local ms</th><th class="num">queue share</th>'
              '<th class="num">req/s pk</th><th>Reading</th></tr>')
     order = sorted(per, key=lambda k: -(pk(per[k], "total_ms") or 0))
+    shown, usable = 0, []
     for rq in order:
         rs = per[rq]
         t, q, l = pk(rs, "total_ms"), pk(rs, "queue_ms"), pk(rs, "local_ms")
         rate = pk(rs, "req_per_s")
-        share = (q / t * 100) if (t and q is not None) else None
-        if share is None:
+        bad_split = lat_incoherent(t, q, l)
+        if t is not None and not bad_split:
+            shown += 1
+            usable.append(rq)
+        # No total time means every sample for this request was refused by the
+        # validator. A queue share computed from refused numbers would be a
+        # fabricated diagnosis, so the row states that instead.
+        share = None if bad_split else ((q / t * 100) if (t and q is not None) else None)
+        if t is None:
+            cls, txt = "", "not usable — values outside any possible range"
+        elif bad_split:
+            cls, txt = "", "total, queue and local are identical — the split is not measured"
+        elif share is None:
             cls, txt = "", ""
+        elif share > 70 and q >= MATERIAL_MS:
+            # A queue-dominated request on brokers that still had idle handlers
+            # is not a capacity problem — recommending more brokers there would
+            # cost money and fix nothing.
+            if w.min_idle is not None and w.min_idle >= 50:
+                cls, txt = "warn", ("queue-dominated, but handlers kept "
+                                    f"{f1(w.min_idle)}% idle — look at batch size, linger.ms and "
+                                    "partition count before adding brokers")
+            else:
+                cls, txt = "bad", "backed up — add capacity, not tuning"
         elif share > 70:
-            cls, txt = "bad", "backed up — add capacity, not tuning"
-        elif share > 40:
+            cls, txt = "good", f"queue-dominated, but only {f1(q)} ms — too small to act on"
+        elif share > 40 and q >= MATERIAL_MS:
             cls, txt = "warn", "queueing noticeably"
+        elif share > 40:
+            cls, txt = "good", "mostly queueing, but the absolute time is small"
         else:
             cls, txt = "good", "time spent doing work, not waiting"
         sp = f'<span class="pill {cls}">{share:.0f}%</span>' if share is not None else "–"
-        h.append(f'<tr><td class="mono">{esc(rq)}</td><td class="num">{f1(t)}</td>'
-                 f'<td class="num">{f1(q)}</td><td class="num">{f1(l)}</td>'
+        # A value whose own breakdown is self-contradictory is not a measurement,
+        # so the cells are left empty rather than printed with a caveat.
+        ct, cq, cl = ("–", "–", "–") if bad_split else (f1(t), f1(q), f1(l))
+        h.append(f'<tr><td class="mono">{esc(rq)}</td><td class="num">{ct}</td>'
+                 f'<td class="num">{cq}</td><td class="num">{cl}</td>'
                  f'<td class="num">{sp}</td><td class="num">{n0(rate)}</td>'
                  f'<td class="muted">{txt}</td></tr>')
     h.append("</table></div>")
+    if shown == 0:
+        h.append('<div class="verdict bad"><b>No latency figure in this section can be used.</b> '
+                 'Either the values were outside the range a request time can physically take, or total, '
+                 'queue and local time were identical — both mean the collector resolved a cumulative '
+                 '<span class="mono">_total</span> / <span class="mono">_sum</span> counter instead of the '
+                 'latency gauge. Run <span class="mono">./perf-kafka.sh --metrics totaltime</span> to see '
+                 'which series names the exporter actually publishes. <b>No conclusion about queueing is '
+                 'drawn from this data.</b></div>')
+        return "".join(h)
+    # Charted by traffic, not by worst time. Protocol waits like JoinGroup
+    # (which simply sits out the rebalance timeout) are the largest numbers in
+    # the table and carry almost no requests — on a shared y-axis they flatten
+    # Produce and Fetch into the baseline, hiding the latencies that matter.
+    chart_order = sorted(usable, key=lambda k: (-(pk(per[k], "req_per_s") or 0),
+                                                -(pk(per[k], "total_ms") or 0)))
     series, cols = [], [S1, S2, S3, S4]
-    for n, rq in enumerate(order[:4]):
-        pts = [(F(r["elapsed_s"], 0) or 0, F(r["total_ms"])) for r in per[rq] if F(r.get("total_ms")) is not None]
+    for n, rq in enumerate(chart_order[:4]):
+        pts = w.pts(per[rq], "total_ms")
         if pts:
             series.append({"name": rq, "color": cols[n % 4], "pts": pts})
     if series:
-        h.append('<h3>p99 total time by request type</h3>')
+        h.append(f'<h3>{K} total time by request type</h3>')
         h.append('<div class="chart">' + svg(series, ylab="ms", xfmt=w.xfmt()) + "</div>")
         h.append(legend([(s["name"], s["color"]) for s in series]))
     return "".join(h)
@@ -559,7 +748,8 @@ def sec_topics(w):
     h.append('<div class="tbl-wrap"><table><tr><th>Topic</th><th class="num">MB/s in pk</th>'
              '<th class="num">MB/s in avg</th><th class="num">MB/s out pk</th>'
              '<th class="num">msg/s pk</th><th class="num">share of ingress</th></tr>')
-    tot = sum((av(per[t], "bytes_in_mb_s") or 0) for t in per) or 1
+    tot_av = sum((av(per[t], "bytes_in_mb_s") or 0) for t in per)
+    tot = tot_av or 1          # share denominator only; never printed
     TI = TO = TM = 0.0
     for t in sorted(per, key=lambda k: -(pk(per[k], "bytes_in_mb_s") or 0)):
         rs = per[t]
@@ -573,7 +763,7 @@ def sec_topics(w):
                  f'<td class="num">{n0(m_)}</td>'
                  f'<td class="num"><span class="bar" style="width:{bw}px"></span> {sh:.1f}%</td></tr>')
     h.append(f'<tr class="tot"><td>TOTAL <span class="muted">({len(per)} topics)</span></td>'
-             f'<td class="num">{f1(TI,"",2)}</td><td class="num"></td>'
+             f'<td class="num">{f1(TI,"",2)}</td><td class="num">{f1(tot_av,"",2)}</td>'
              f'<td class="num">{f1(TO,"",2)}</td><td class="num">{n0(TM)}</td>'
              f'<td class="num">100%</td></tr>')
     h.append("</table></div>")
@@ -651,6 +841,10 @@ def sec_infra(w):
 
 def sec_raw(w):
     h = ['<h2>8 · Raw samples</h2>']
+    h.append('<p class="muted">This appendix prints the CSV rows <b>exactly as the collector wrote them</b>, '
+             'with no validation applied — that is its purpose, so the capture can be audited against the '
+             'files. Sections 1–7 above apply the checks; where a figure was refused there, the unfiltered '
+             'value still appears here. <b>Quote figures from the sections above, not from this appendix.</b></p>')
     if w.clu:
         h.append(f'<details><summary>cluster — {len(w.clu)} samples</summary><div class="tbl-wrap"><table>'
                  '<tr><th>Time</th><th class="num">Elapsed</th><th class="num">Ctl</th>'
@@ -687,8 +881,14 @@ def sec_raw(w):
             cells = ""
             for c in cols:
                 v = r.get(c, "")
-                cells += (f'<td class="num">{esc(v)}</td>' if F(v) is None
-                          else f'<td class="num">{f1(v,"",2) if "." in str(v) else n0(v)}</td>')
+                if F(v) is not None:
+                    cells += f'<td class="num">{f1(v,"",2) if "." in str(v) else n0(v)}</td>'
+                elif str(v).strip() == "":
+                    # a metric the exporter never published — say so, don't
+                    # leave a blank cell that reads as a broken table
+                    cells += '<td class="num muted">–</td>'
+                else:
+                    cells += f'<td class="num">{esc(v)}</td>'
             h.append(f'<tr><td class="mono">{short_ts(r.get("ts_ist",""))}</td>'
                      f'<td class="num">{n0(r.get("elapsed_s"))}</td>{cells}</tr>')
         if len(rows) > 400:
@@ -720,6 +920,13 @@ def verdict(w):
                 cls = "warn"
         else:
             bits.append(f"Handlers never dropped below {f1(w.min_idle)}% idle — comfortable headroom.")
+    elif w.brk:
+        # The single most important saturation signal is missing. Saying nothing
+        # would let the reader assume it was fine, so the gap is stated outright.
+        bits.append("<b>Request handler idle was not measured</b>, so broker saturation is unknown "
+                    "for this window — the headroom question is open, not answered.")
+        if cls == "good":
+            cls = "warn"
     if w.max_urp:
         bits.append(f"Under-replicated peaked at {n0(w.max_urp)}.")
         if cls == "good":
@@ -738,18 +945,53 @@ def verdict(w):
     return cls, " ".join(bits)
 
 
+def quality_banner(wins):
+    """Rendered only when something was refused. It names what was thrown away
+    and how to fix the collector, so a thin report is never mistaken for a
+    healthy cluster."""
+    notes = []
+    if REJECTED:
+        items = ", ".join(f"<b>{esc(k)}</b> ({v} value{'s' if v != 1 else ''})"
+                          for k, v in sorted(REJECTED.items()))
+        notes.append(
+            "Some collected values were physically impossible and have been <b>refused, not "
+            f"displayed</b>: {items}. This is the signature of a JMX series resolved to a cumulative "
+            "<span class=\"mono\">_total</span> / <span class=\"mono\">_sum</span> counter where a gauge "
+            "was wanted. Everything else in this report is unaffected — the refused figures are simply "
+            "absent rather than guessed. To fix the capture, confirm the series names with "
+            "<span class=\"mono\">./perf-kafka.sh --metrics</span> and re-run on build "
+            "<span class=\"mono\">2026-10-09.4</span> or later "
+            "(<span class=\"mono\">./perf-kafka.sh --version</span>).")
+    for w in wins:
+        if getattr(w, "part_bad", False):
+            notes.append(
+                f"Window <span class=\"mono\">{esc(w.tag)}</span> reported fewer partition replicas than "
+                "partition leaders, which cannot happen — every leader is itself a replica. Both figures "
+                "have been withheld.")
+    if not notes:
+        return ""
+    return ('<div class="verdict bad"><b>Data quality — read this before quoting any figure.</b> '
+            + " ".join(notes) + "</div>")
+
+
 def build(wins):
     utc = datetime.datetime.now(datetime.timezone.utc)
     ist = utc + datetime.timedelta(hours=5, minutes=30)
     now = ist.strftime("%Y-%m-%d %H:%M IST") + " / " + utc.strftime("%H:%M UTC")
+    ver = ""
+    for w in wins:
+        if w.info.get("script_version"):
+            ver = " · collector build " + esc(w.info["script_version"].split()[0])
+            break
     H = ['<!doctype html><html><head><meta charset="utf-8">'
          '<meta name="viewport" content="width=device-width, initial-scale=1">'
          '<title>SBIePay 2.0 - PERF Kafka Report</title>', CSS, '</head><body><div class="wrap">']
     H.append('<div class="masthead"><div class="kick">Kafka · Broker &amp; Consumer Load</div>'
              '<h1>SBIePay 2.0 - PERF Kafka Report</h1>'
-             f'<div class="sub">Prepared by Saadi M Muzzammil · generated {now}</div>'
+             f'<div class="sub">Prepared by Saadi M Muzzammil · generated {now} · '
+             f'report build {esc(KR_VERSION.split()[0])}</div>'
              f'<div class="sub">Windows: {esc(", ".join(w.tag for w in wins))} · '
-             'source: perf-kafka.sh (JMX via Thanos + in-pod Kafka CLI)</div>'
+             f'source: perf-kafka.sh (JMX via Thanos + in-pod Kafka CLI){ver}</div>'
              '<div class="sub" style="margin-top:11px">'
              '<a href="https://oneviewuat.sbi/" target="_blank" rel="noopener" style="margin-right:18px">Dynatrace ↗</a>'
              '<a href="https://console-openshift-console.apps.preprod.epay.sbi/" target="_blank" rel="noopener" '
@@ -764,17 +1006,25 @@ def build(wins):
         H.append('<div class="navbtns"><a href="#s1">1 · Health</a><a href="#s2">2 · Window</a>'
                  '<a href="#s3">3 · Brokers</a><a href="#s4">4 · Latency</a><a href="#s5">5 · Lag</a>'
                  '<a href="#s6">6 · Topics</a><a href="#s7">7 · Pods</a><a href="#s8">8 · Raw</a></div>')
+    # Sections are rendered first so every rejection is already counted, then
+    # the data-quality banner is placed above them — the reader must see what was
+    # refused before they read any figure.
+    body = []
     for w in wins:
-        vc, vt = verdict(w)
         if multi:
-            H.append(f'<span id="w-{esc(w.tag)}"></span><div class="groupband">'
-                     f'<h2 class="group">Window · {esc(w.tag)}</h2>'
-                     f'<span class="gsub">{short_ts(w.start)} → {short_ts(w.end)} IST</span></div>')
-        H.append(f'<div class="verdict {vc}"><b>Summary.</b> {vt}</div>')
+            body.append(f'<span id="w-{esc(w.tag)}"></span><div class="groupband">'
+                        f'<h2 class="group">Window · {esc(w.tag)}</h2>'
+                        f'<span class="gsub">{short_ts(w.start)} → {short_ts(w.end)} IST</span></div>')
         pre = "" if multi else '<span id="s%d"></span>'
-        for i, body in enumerate((sec_health(w), sec_window(w), sec_brokers(w), sec_latency(w),
-                                  sec_lag(w), sec_topics(w), sec_infra(w), sec_raw(w)), start=1):
-            H.append((pre % i if pre else "") + body)
+        secs = []
+        for i, sb in enumerate((sec_health(w), sec_window(w), sec_brokers(w), sec_latency(w),
+                                sec_lag(w), sec_topics(w), sec_infra(w), sec_raw(w)), start=1):
+            secs.append((pre % i if pre else "") + sb)
+        vc, vt = verdict(w)
+        body.append(f'<div class="verdict {vc}"><b>Summary.</b> {vt}</div>')
+        body.extend(secs)
+    H.append(quality_banner(wins))
+    H.extend(body)
     H.append('<p class="muted" style="text-align:center;margin-top:40px;border-top:1px solid var(--line);'
              'padding-top:14px">© Saadi M Muzzammil · read-only · generated from perf-kafka.sh CSVs.</p>')
     H.append("</div></body></html>")
@@ -786,7 +1036,12 @@ def main():
     ap.add_argument("--tag", action="append", default=[])
     ap.add_argument("--dir", default=".")
     ap.add_argument("-o", default="KAFKA_Report.html")
+    ap.add_argument("--version", "-V", action="store_true",
+                    help="print the report build and exit")
     a = ap.parse_args()
+    if a.version:
+        print(f"kafka_report.py {KR_VERSION}")
+        return
     tags = a.tag
     if not tags:
         for f in sorted(os.listdir(a.dir)):

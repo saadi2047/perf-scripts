@@ -222,10 +222,17 @@ for b in sorted(brokers):
     hi = handler.get(b)
     ni = netproc.get(b)
     # exporters publish idle as a 0-1 ratio in some versions, 0-100 in others
+    # exporters publish idle as 0-1 in some versions and 0-100 in others
     if hi is not None and hi <= 1.0:
         hi *= 100
     if ni is not None and ni <= 1.0:
         ni *= 100
+    # A percentage outside 0..100 is impossible: the series was mis-resolved
+    # (a cumulative _total instead of the gauge). Refuse to print a number.
+    if hi is not None and (hi < 0 or hi > 100.5):
+        hi = None
+    if ni is not None and (ni < 0 or ni > 100.5):
+        ni = None
     if hi is not None and (min_idle is None or hi < min_idle):
         min_idle = hi
     flagc = "!" if (hi is not None and hi < 30) or (opt("urp", urp, b) or 0) > 0 else ""

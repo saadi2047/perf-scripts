@@ -41,7 +41,15 @@
 # ============================================================================
 set -u
 
+# Bump on every change. Printed at startup, by --version and by --check, and
+# written into each run folder, so there is never any doubt about which build
+# produced a given set of CSVs.
+PK_VERSION="2026-10-09.4  (gauge/counter picker + countdown)"
+
 CHECK=0
+case "${1:-}" in
+  --version|-V) echo "perf-kafka.sh $PK_VERSION"; exit 0;;
+esac
 [ "${1:-}" = "--check" ] && { CHECK=1; shift; }
 
 INT=15; TAG=""; GOT_INT=0; GOT_DUR=0; GOT_OUT=0
@@ -172,6 +180,11 @@ if [ -z "$THANOS" ]; then
   fi
 fi
 
+fmt_hms() {   # seconds -> 4m12s / 1h07m
+  awk -v s="$1" 'BEGIN{ s=int(s); if (s<0) s=0;
+    if (s<3600) printf "%dm%02ds", s/60, s%60; else printf "%dh%02dm", s/3600, (s%3600)/60 }'
+}
+
 now_ms() {
   _t=$(date +%s%3N 2>/dev/null)
   case "$_t" in ''|*[!0-9]*) echo "$(date +%s)000" ;; *) echo "$_t" ;; esac
@@ -276,12 +289,25 @@ probe_known() {
   done
 }
 
-# find_metric PATTERN  -> the best matching metric name, or "" if none.
-# Prefers a counter (_total) over a gauge snapshot of the same concept.
+# find_metric PATTERN [KIND]  -> the best matching metric name, or "".
+#
+# KIND matters. The exporter publishes several name variants for the same JMX
+# attribute: a plain gauge AND a _total/_count/_sum aggregate. Picking the
+# aggregate for a gauge concept yields an ever-growing cumulative number, which
+# is how "handler idle" came out as 1971795720000000000% and request latency as
+# 671,338,000 ms. So:
+#   counter -> prefer _total/_count  (bytes, messages, elections: rates)
+#   gauge   -> prefer the PLAIN name (idle %, queue depth, partition count,
+#              purgatory, latency percentiles: instantaneous values)
 find_metric() {
-  grep -iE "$1" "$MNAMES" 2>/dev/null | awk '
-    { all[NR]=$0; if ($0 ~ /_total$/ && !t) t=$0; if ($0 ~ /_count$/ && !c) c=$0 }
-    END { if (t) print t; else if (c) print c; else if (NR) print all[1] }'
+  grep -iE "$1" "$MNAMES" 2>/dev/null | awk -v kind="${2:-gauge}" '
+    { n=$0
+      agg = (n ~ /_(total|count|sum)$/)
+      if (agg) { if (!c) c=n } else { if (!g) g=n }
+      if (!f) f=n }
+    END {
+      if (kind=="counter") { print (c!="" ? c : (g!="" ? g : f)) }
+      else                 { print (g!="" ? g : (c!="" ? c : f)) } }'
 }
 
 # rate_or_value NAME WINDOW -> a promQL fragment: rate() for counters, raw for gauges
@@ -370,34 +396,38 @@ if [ "$NMET" -lt 8 ]; then
   NMET=$NEW
 fi
 
-M_BYTESIN=$(find_metric 'brokertopicmetrics.*bytesin|bytes_in_per_sec|bytesinpersec')
-M_BYTESOUT=$(find_metric 'brokertopicmetrics.*bytesout|bytes_out_per_sec|bytesoutpersec')
-M_MSGIN=$(find_metric 'brokertopicmetrics.*messagesin|messages_in_per_sec|messagesinpersec')
-M_HANDLER=$(find_metric 'requesthandler.*idle|request_handler.*idle')
-M_NETPROC=$(find_metric 'networkprocessor.*idle|network_processor.*idle')
-M_URP=$(find_metric 'underreplicatedpartitions|under_replicated_partitions')
-M_OFFLINE=$(find_metric 'offlinepartitionscount|offline_partitions_count')
-M_ACTIVECTL=$(find_metric 'activecontrollercount|active_controller_count')
-M_UNCLEAN=$(find_metric 'uncleanleaderelection')
-M_PARTS=$(find_metric 'replicamanager.*partitioncount|partition_count')
-M_LEADERS=$(find_metric 'replicamanager.*leadercount|leader_count')
-M_ISRSHRINK=$(find_metric 'isrshrink')
-M_ISREXPAND=$(find_metric 'isrexpand')
-M_REQQ=$(find_metric 'requestqueuesize|request_queue_size')
-M_RESPQ=$(find_metric 'responsequeuesize|response_queue_size')
-M_PURG=$(find_metric 'purgatorysize|purgatory_size')
-M_TOTTIME=$(find_metric 'requestmetrics.*totaltime|total_time_ms')
-M_QTIME=$(find_metric 'requestmetrics.*requestqueuetime|request_queue_time_ms')
-M_LTIME=$(find_metric 'requestmetrics.*localtime|local_time_ms')
-M_REQRATE=$(find_metric 'requestmetrics.*requestspersec|requests_per_sec')
-M_FETCHLAG=$(find_metric 'fetcherlag|consumer_lag|replica.*lag')
-M_LOGSIZE=$(find_metric 'log_size|logsize')
-M_HEAP=$(find_metric '^jvm_memory_bytes_used$|^jvm_memory_used_bytes$')
-M_GCCOUNT=$(find_metric '^jvm_gc_collection_seconds_count$|^jvm_gc_pause_seconds_count$')
-M_GCTIME=$(find_metric '^jvm_gc_collection_seconds_sum$|^jvm_gc_pause_seconds_sum$')
-M_CGLAG=$(find_metric '^kafka_consumergroup_lag$|consumergroup_lag')
-M_PVCUSED=$(find_metric '^kubelet_volume_stats_used_bytes$')
-M_PVCCAP=$(find_metric '^kubelet_volume_stats_capacity_bytes$')
+M_BYTESIN=$(find_metric 'brokertopicmetrics.*bytesin|bytes_in_per_sec|bytesinpersec' counter)
+M_BYTESOUT=$(find_metric 'brokertopicmetrics.*bytesout|bytes_out_per_sec|bytesoutpersec' counter)
+M_MSGIN=$(find_metric 'brokertopicmetrics.*messagesin|messages_in_per_sec|messagesinpersec' counter)
+M_HANDLER=$(find_metric 'requesthandler.*idle|request_handler.*idle' gauge)
+M_NETPROC=$(find_metric 'networkprocessor.*idle|network_processor.*idle' gauge)
+M_URP=$(find_metric 'underreplicatedpartitions|under_replicated_partitions' gauge)
+M_OFFLINE=$(find_metric 'offlinepartitionscount|offline_partitions_count' gauge)
+M_ACTIVECTL=$(find_metric 'activecontrollercount|active_controller_count' gauge)
+M_UNCLEAN=$(find_metric 'uncleanleaderelection' counter)
+M_PARTS=$(find_metric 'replicamanager.*partitioncount|partition_count' gauge)
+M_LEADERS=$(find_metric 'replicamanager.*leadercount|leader_count' gauge)
+M_ISRSHRINK=$(find_metric 'isrshrink' counter)
+M_ISREXPAND=$(find_metric 'isrexpand' counter)
+M_REQQ=$(find_metric 'requestqueuesize|request_queue_size' gauge)
+M_RESPQ=$(find_metric 'responsequeuesize|response_queue_size' gauge)
+M_PURG=$(find_metric 'purgatorysize|purgatory_size' gauge)
+M_TOTTIME=$(find_metric 'requestmetrics.*totaltime|total_time_ms' gauge)
+# a Timer's _count/_sum are not latencies; drop them if that is all we matched
+case "$M_TOTTIME" in *_count|*_sum|*_total) M_TOTTIME="";; esac
+M_QTIME=$(find_metric 'requestmetrics.*requestqueuetime|request_queue_time_ms' gauge)
+M_LTIME=$(find_metric 'requestmetrics.*localtime|local_time_ms' gauge)
+case "$M_QTIME" in *_count|*_sum|*_total) M_QTIME="";; esac
+case "$M_LTIME" in *_count|*_sum|*_total) M_LTIME="";; esac
+M_REQRATE=$(find_metric 'requestmetrics.*requestspersec|requests_per_sec' counter)
+M_FETCHLAG=$(find_metric 'fetcherlag|consumer_lag|replica.*lag' gauge)
+M_LOGSIZE=$(find_metric 'log_size|logsize' gauge)
+M_HEAP=$(find_metric '^jvm_memory_bytes_used$|^jvm_memory_used_bytes$' gauge)
+M_GCCOUNT=$(find_metric '^jvm_gc_collection_seconds_count$|^jvm_gc_pause_seconds_count$' counter)
+M_GCTIME=$(find_metric '^jvm_gc_collection_seconds_sum$|^jvm_gc_pause_seconds_sum$' counter)
+M_CGLAG=$(find_metric '^kafka_consumergroup_lag$|consumergroup_lag' gauge)
+M_PVCUSED=$(find_metric '^kubelet_volume_stats_used_bytes$' gauge)
+M_PVCCAP=$(find_metric '^kubelet_volume_stats_capacity_bytes$' gauge)
 
 # which label carries the pod name on the JMX series
 POD_LABEL="pod"
@@ -431,7 +461,7 @@ fi
 # ---------------------------------------------------------------- preflight -
 selfcheck() {
   fail=0
-  echo "PERF-KAFKA PREFLIGHT"
+  echo "PERF-KAFKA PREFLIGHT   —   script version $PK_VERSION"
   echo "--------------------------------------------------------------------------"
   printf " 1. oc client          : "; v=$(oc version --client 2>&1 | head -1); echo "${v:-<no output>}"
   printf " 2. session valid      : "
@@ -582,6 +612,7 @@ START_IST=$(TZ=Asia/Kolkata date '+%Y-%m-%d %H:%M:%S')
 # empty, not zero: "0 MB/s" and "100% idle" would both be lies when the metric
 # was never published at all
 PEAK_IN=""; PEAK_OUT=""; PEAK_MSG=""; MIN_IDLE=""; MAX_URP=""; MAX_LAG=""; SAMPLES=0
+REMAIN=""; TOTSAMP=""; ETA=""; PROG=""
 
 finish() {
   END_IST=$(TZ=Asia/Kolkata date '+%Y-%m-%d %H:%M:%S')
@@ -641,11 +672,18 @@ finish() {
 trap finish INT
 
 echo
+echo "[*] perf-kafka.sh version $PK_VERSION"
 echo "[*] plan for this window:"
 printf "      duration   : %ss (%s)\n" "$DURATION" "$(fmt_dur "$DURATION")"
 printf "      interval   : every %ss   (deep CLI capture every %s cycles)\n" "$INT" "$DEEP_EVERY"
 printf "      namespace  : %s   brokers: %s\n" "$NS" "$NBROKER"
 printf "      run folder : %s\n" "$OUTDIR"
+# leave a fingerprint beside the data
+{ echo "script_version=$PK_VERSION"
+  echo "started_ist=$(TZ=Asia/Kolkata date '+%Y-%m-%d %H:%M:%S')"
+  echo "namespace=$NS"; echo "interval_s=$INT"; echo "duration_s=$DURATION"
+  echo "tag=$TAG"; echo "brokers=$NBROKER"
+} > "$OUTDIR/run_info.txt" 2>/dev/null
 [ "$NOREPORT" -eq 0 ] && printf "      the HTML report is built automatically when the window closes\n"
 echo
 [ "$NMET" -lt 5 ] && echo "  [!] few/no JMX metrics in Thanos — run --check; collection will be partial"
@@ -660,6 +698,15 @@ while :; do
     finish
   fi
   i=$((i+1)); SAMPLES=$i
+  if [ "$DEADLINE" -gt 0 ]; then
+    REMAIN=$(( DEADLINE - NOW )); [ "$REMAIN" -lt 0 ] && REMAIN=0
+    TOTSAMP=$(( DURATION / INT ))
+    ETA=$(TZ=Asia/Kolkata date -d "@$DEADLINE" '+%H:%M:%S' 2>/dev/null \
+          || TZ=Asia/Kolkata date -r "$DEADLINE" '+%H:%M:%S' 2>/dev/null || echo "?")
+    PROG=$(awk -v d="$DURATION" -v r="$REMAIN" 'BEGIN{p=(d>0)?(d-r)*100/d:0; if(p>100)p=100; printf "%.0f", p}')
+  else
+    REMAIN=""; TOTSAMP=""; ETA=""; PROG=""
+  fi
   W="${INT}s"; [ "$INT" -lt 60 ] && W="2m"   # rate() needs >= 2 scrapes
 
   # ---------- Thanos: broker throughput + saturation ----------
@@ -781,17 +828,38 @@ while :; do
   fi
 
   if [ "$QUIET" -eq 1 ]; then
-    printf "[kafka] %s  elapsed %5ss  in %s MB/s  out %s MB/s  hnd-idle %s%%  urp %s\n" \
-      "$TS" "$EL" "${CUR_IN:-?}" "${CUR_OUT:-?}" "${CUR_IDLE:-?}" "${CUR_URP:-?}"
+    if [ -n "$REMAIN" ]; then
+      printf "[kafka] %s  sample %s/%s  %s%%  %s left  in %s MB/s  hnd-idle %s%%  urp %s\n" \
+        "$TS" "$i" "$TOTSAMP" "$PROG" "$(fmt_hms "$REMAIN")" \
+        "${CUR_IN:-?}" "${CUR_IDLE:-?}" "${CUR_URP:-?}"
+    else
+      printf "[kafka] %s  sample %s  elapsed %ss  in %s MB/s  hnd-idle %s%%  urp %s\n" \
+        "$TS" "$i" "$EL" "${CUR_IN:-?}" "${CUR_IDLE:-?}" "${CUR_URP:-?}"
+    fi
     continue
   fi
   clear
   echo "=================================================================================="
-  echo "   PERF-KAFKA — $TS IST    elapsed ${EL}s    cycle ${INT}s    ns=$NS    tag=$TAG"
-  echo "   window start $START_IST IST    sample $i"
+  echo "   PERF-KAFKA — $TS IST    cycle ${INT}s    ns=$NS    tag=$TAG"
+  if [ -n "$REMAIN" ]; then
+    _bar=$(awk -v p="$PROG" 'BEGIN{n=int(p/2.5); for(i=0;i<40;i++) printf (i<n)?"#":"."}')
+    printf "   elapsed %-7s  REMAINING %-8s  ends ~%s IST   sample %s/%s\n" \
+      "$(fmt_hms "$EL")" "$(fmt_hms "$REMAIN")" "$ETA" "$i" "$TOTSAMP"
+    printf "   [%s] %s%%\n" "$_bar" "$PROG"
+  else
+    printf "   elapsed %-7s  no duration limit — runs until Ctrl-C   sample %s\n" \
+      "$(fmt_hms "$EL")" "$i"
+  fi
+  echo "   window start $START_IST IST"
   echo "=================================================================================="
   printf '%s\n' "$OUT" | grep -v '^##STAT '
   [ -n "$LAGLINE" ] && { echo; echo "$LAGLINE"; }
   echo "=================================================================================="
-  printf "   Ctrl-C for the window summary   |   CSVs: %s/kafka_*_%s.csv\n" "$OUTDIR" "$TAG"
+  if [ -n "$REMAIN" ]; then
+    printf "   %s remaining (ends ~%s IST)   |   Ctrl-C to stop early and still get the report\n" \
+      "$(fmt_hms "$REMAIN")" "$ETA"
+  else
+    printf "   Ctrl-C for the window summary and the HTML report\n"
+  fi
+  printf "   CSVs: %s/kafka_*_%s.csv\n" "$OUTDIR" "$TAG"
 done

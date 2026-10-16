@@ -44,7 +44,7 @@ set -u
 # Bump on every change. Printed at startup, by --version and by --check, and
 # written into each run folder, so there is never any doubt about which build
 # produced a given set of CSVs.
-PK_VERSION="2026-10-09.12 (paste-safe discovery, KRaft name fallback, clamped %)"
+PK_VERSION="2026-10-16.1 (per-topic produce/fetch outcomes, summary CSV)"
 
 CHECK=0
 case "${1:-}" in
@@ -481,6 +481,13 @@ fi
 M_BYTESIN=$(find_metric 'brokertopicmetrics.*bytesin|bytes_in_per_sec|bytesinpersec' counter)
 M_BYTESOUT=$(find_metric 'brokertopicmetrics.*bytesout|bytes_out_per_sec|bytesoutpersec' counter)
 M_MSGIN=$(find_metric 'brokertopicmetrics.*messagesin|messages_in_per_sec|messagesinpersec' counter)
+# Per-topic request outcomes. Produce = what producers sent, Fetch = what
+# consumers asked for; the Failed* counters are the broker-side rejections
+# (NOT_ENOUGH_REPLICAS, unknown topic/partition, bad request).
+M_PRODTOT=$(find_metric 'brokertopicmetrics.*totalproducerequests' counter)
+M_PRODFAIL=$(find_metric 'brokertopicmetrics.*failedproducerequests' counter)
+M_FETCHTOT=$(find_metric 'brokertopicmetrics.*totalfetchrequests' counter)
+M_FETCHFAIL=$(find_metric 'brokertopicmetrics.*failedfetchrequests' counter)
 M_HANDLER=$(find_metric 'requesthandler.*idle|request_handler.*idle' gauge)
 # RequestHandlerAvgIdlePercent is a Yammer Meter. The stock Strimzi exporter
 # rules map its MeanRate to a gauge (their kafka-metrics.yaml line 61 says so in
@@ -631,6 +638,8 @@ selfcheck() {
               "request queue:$M_REQQ" "response queue:$M_RESPQ" "purgatory:$M_PURG" \
               "total time:$M_TOTTIME" "queue time:$M_QTIME" "local time:$M_LTIME" \
               "request rate:$M_REQRATE" "follower lag:$M_FETCHLAG" "log size:$M_LOGSIZE" \
+              "produce req total:$M_PRODTOT" "produce req failed:$M_PRODFAIL" \
+              "fetch req total:$M_FETCHTOT" "fetch req failed:$M_FETCHFAIL" \
               "JVM heap:$M_HEAP" "GC count:$M_GCCOUNT" "GC time:$M_GCTIME" \
               "consumer lag:$M_CGLAG" "PVC used:$M_PVCUSED"; do
     k=${pair%%:*}; v=${pair#*:}
@@ -693,6 +702,7 @@ for pair in "bytesin:$M_BYTESIN" "handler:$M_HANDLER" "netproc:$M_NETPROC" \
             "urp:$M_URP" "parts:$M_PARTS" "leaders:$M_LEADERS" "atminisr:$M_ATMINISR" \
             "reqq:$M_REQQ" "respq:$M_RESPQ" "purg:$M_PURG" \
             "purg_prod:$M_PURG" "handler_c:$M_HANDLER_C" "iowait:$M_IOWAIT" \
+            "ptot:$M_PRODTOT" "pfail:$M_PRODFAIL" "ftot:$M_FETCHTOT" "ffail:$M_FETCHFAIL" \
             "isr:$M_ISRSHRINK" "fetchlag:$M_FETCHLAG" "heap:$M_HEAP" "gc:$M_GCCOUNT"; do
   [ -n "${pair#*:}" ] && HAVE="$HAVE ${pair%%:*}"
 done
@@ -713,7 +723,7 @@ C_HLT="$OUTDIR/kafka_health_${TAG}.csv"
 
 echo "ts_ist,elapsed_s,active_controllers,offline_partitions,under_replicated,unclean_elections,partitions_total,leaders_total,bytes_in_mb_s,bytes_out_mb_s,messages_in_s" > "$C_CLU"
 echo "ts_ist,elapsed_s,pod,bytes_in_mb_s,bytes_out_mb_s,messages_in_s,handler_idle_pct,network_idle_pct,request_queue,response_queue,purgatory,under_replicated,partitions,leaders,isr_shrink_s,isr_expand_s,follower_lag,at_min_isr,purgatory_produce" > "$C_BRK"
-echo "ts_ist,elapsed_s,topic,bytes_in_mb_s,bytes_out_mb_s,messages_in_s" > "$C_TOP"
+echo "ts_ist,elapsed_s,topic,bytes_in_mb_s,bytes_out_mb_s,messages_in_s,produce_ok_s,produce_fail_s,fetch_ok_s,fetch_fail_s" > "$C_TOP"
 echo "ts_ist,elapsed_s,request,total_ms,queue_ms,local_ms,req_per_s" > "$C_LAT"
 echo "ts_ist,elapsed_s,pod,heap_used_mb,gc_count_s,gc_time_ms_s" > "$C_JVM"
 echo "ts_ist,elapsed_s,pod,role,node,phase,ready,restarts,cpu_m,mem_mi" > "$C_POD"
@@ -781,6 +791,10 @@ finish() {
     if [ -f "$_rep" ]; then
       _out="$OUTDIR/KAFKA_Report_$(date +%Y%m%d_%H%M%S).html"
       echo
+      # One flat file per run, so a question about a pod or a topic does not
+      # need nine CSVs joined by hand.
+      _sum="$SCRIPT_DIR/kafka_summary.py"
+      [ -f "$_sum" ] && python3 "$_sum" --dir "$OUTDIR" --tag "$TAG" 2>/dev/null || :
       echo "[*] building the HTML report..."
       if python3 "$_rep" --dir "$OUTDIR" --tag "$TAG" -o "$_out"; then
         echo "[OK] REPORT: $_out"
@@ -902,6 +916,13 @@ while :; do
     qj "sum by($TOPIC_LABEL) ($(rate_expr "$M_BYTESOUT" "$W" 'topic!=""'))" "$TOPIC_LABEL" > "$TMP/t_out" || :
     qj "sum by($TOPIC_LABEL) ($(rate_expr "$M_MSGIN"    "$W" 'topic!=""'))" "$TOPIC_LABEL" > "$TMP/t_msg" || :
   else : > "$TMP/t_in"; : > "$TMP/t_out"; : > "$TMP/t_msg"; fi
+  # per-topic produce / fetch request outcomes
+  for _pair in "t_ptot:$M_PRODTOT" "t_pfail:$M_PRODFAIL" "t_ftot:$M_FETCHTOT" "t_ffail:$M_FETCHFAIL"; do
+    _f="$TMP/${_pair%%:*}"; _m="${_pair#*:}"
+    if [ -n "$_m" ] && [ -n "$TOPIC_LABEL" ]; then
+      qj "sum by($TOPIC_LABEL) ($(rate_expr "$_m" "$W" 'topic!=""'))" "$TOPIC_LABEL" > "$_f" 2>/dev/null || :
+    else : > "$_f"; fi
+  done
 
   # ---------- Thanos: latency by request type ----------
   : > "$TMP/lat"

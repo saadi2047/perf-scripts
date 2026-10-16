@@ -15,7 +15,7 @@ import os, re, csv, argparse, datetime, textwrap, statistics as st
 
 # Bumped whenever the report's judgement changes, so a file can always be traced
 # to the build that produced it. Printed in the masthead and by --version.
-KR_VERSION = "2026-10-09.12 (GC-absent cross-check)"
+KR_VERSION = "2026-10-16.1 (pod CPU/mem charts, topic ok+fail, chart label fixes)"
 
 def read(p):
     if not p or not os.path.exists(p):
@@ -307,7 +307,9 @@ def svg(series, width=1140, height=250, ylab="", xfmt=None):
     series = [s for s in series if s.get("pts")]
     if not series:
         return '<p class="muted">No samples to plot.</p>'
-    PL, PR, PT, PB = 70, 16, 14, 34
+    # PT leaves room for the y-axis title ABOVE the top gridline; at 14 the
+    # title and the topmost tick label occupied the same band and overlapped.
+    PL, PR, PT, PB = 70, 16, 27, 34
     xs = [p[0] for s in series for p in s["pts"]]
     ys = [p[1] for s in series for p in s["pts"]]
     x0, x1 = min(xs), max(xs)
@@ -319,19 +321,28 @@ def svg(series, width=1140, height=250, ylab="", xfmt=None):
     Y = lambda v: PT + ih - (min(v, ytop) / ytop) * ih
     o = [f'<svg viewBox="0 0 {width} {height}" width="100%" height="{height}" '
          f'preserveAspectRatio="xMidYMid meet" style="display:block">']
+    # The conditional used to bind to the WHOLE concatenation, so whenever ytop
+    # was under 10 the opening <text> tag was dropped and the number was emitted
+    # bare, leaving a dangling </text>. Every throughput chart on an idle cluster
+    # hit that path, which is why their y-axes had no labels.
+    dec = 0 if ytop >= 10 else (1 if ytop >= 1 else (2 if ytop >= 0.1 else 3))
     for k in range(5):
         v = ytop * k / 4.0; y = Y(v)
         o.append(f'<line x1="{PL}" y1="{y:.1f}" x2="{width-PR}" y2="{y:.1f}" stroke="#ece6de" stroke-width="1"/>')
-        o.append(f'<text x="{PL-8}" y="{y+4:.1f}" font-size="11" fill="#6b6058" text-anchor="end">'
-                 f'{v:,.0f}' if ytop >= 10 else f'{v:,.1f}')
-        o[-1] += '</text>'
+        o.append(f'<text x="{PL-8}" y="{y+4:.1f}" font-size="11" fill="#6b6058" '
+                 f'text-anchor="end">{v:,.{dec}f}</text>')
     for k in range(7):
         v = x0 + (x1 - x0) * k / 6.0; x = X(v)
         o.append(f'<line x1="{x:.1f}" y1="{PT+ih}" x2="{x:.1f}" y2="{PT+ih+4}" stroke="#c9bfb3" stroke-width="1"/>')
         lab = xfmt(v) if xfmt else f"{v:,.0f}s"
         o.append(f'<text x="{x:.1f}" y="{PT+ih+18}" font-size="11" fill="#6b6058" text-anchor="middle">{lab}</text>')
+    ylab_box = None
     if ylab:
-        o.append(f'<text x="4" y="{PT+10}" font-size="11" fill="#6b6058">{ylab}</text>')
+        o.append(f'<text x="4" y="12" font-size="11" fill="#6b6058">{ylab}</text>')
+        ylab_box = {"x": 4 + len(ylab) * 6.1 / 2, "y": 12, "w": len(ylab) * 6.1 + 8}
+    # Draw the lines first, then place the peak labels, so the labels can be
+    # de-collided against each other without disturbing the plot.
+    peaks = []
     for idx, s in enumerate(series):
         pts = sorted(s["pts"]); col = s.get("color", S1)
         d = " ".join(f"{X(a):.1f},{Y(b):.1f}" for a, b in pts)
@@ -342,9 +353,37 @@ def svg(series, width=1140, height=250, ylab="", xfmt=None):
                  f'stroke-linejoin="round" stroke-linecap="round"/>')
         px, py = max(pts, key=lambda p: p[1])
         o.append(f'<circle cx="{X(px):.1f}" cy="{Y(py):.1f}" r="4" fill="{col}" stroke="#fff" stroke-width="2"/>')
-        tx = min(max(X(px), PL + 34), width - PR - 34)
-        o.append(f'<text x="{tx:.1f}" y="{max(Y(py)-11-14*idx, PT+10):.1f}" font-size="11" font-weight="700" '
-                 f'fill="{col}" text-anchor="middle">{py:,.0f}</text>')
+        peaks.append({"x": min(max(X(px), PL + 34), width - PR - 34),
+                      "y": Y(py) - 11, "txt": f"{py:,.{dec}f}", "col": col})
+
+    # A fixed 14px-per-series stagger was not enough: three brokers peaking at
+    # 94/99/100% put all three labels in the same few pixels, which is the
+    # "graphs are overlapping" that shows up on screen. Resolve it by measuring
+    # each label and pushing any collision downwards until it clears.
+    # font-size 11 renders ~13px tall, so a 13px pitch leaves two labels exactly
+    # touching and the browser still reports an intersection. 15 clears it.
+    # Measured: font-size 11 renders 12.5px tall at ~6.01px per character.
+    PITCH, CHW = 14.0, 6.1
+    placed = [ylab_box] if ylab_box else []
+    for lb in sorted(peaks, key=lambda q: q["y"]):
+        lb["w"] = len(lb["txt"]) * CHW + 6
+        # clamp INTO the plot area first — clamping afterwards collapsed every
+        # resolved position back onto the same line
+        lb["y"] = min(max(lb["y"], PT + 11), PT + ih - 2)
+        for _ in range(len(placed) + 2):
+            hit = next((q for q in placed
+                        if abs(lb["y"] - q["y"]) < PITCH
+                        and abs(lb["x"] - q["x"]) < (lb["w"] + q["w"]) / 2), None)
+            if hit is None:
+                break
+            if lb["y"] + PITCH <= PT + ih - 2:
+                lb["y"] += PITCH
+            else:
+                lb["x"] = max(PL + lb["w"] / 2,
+                              min(lb["x"] + lb["w"], width - PR - lb["w"] / 2))
+        placed.append(lb)
+        o.append(f'<text x="{lb["x"]:.1f}" y="{lb["y"]:.1f}" font-size="11" font-weight="700" '
+                 f'fill="{lb["col"]}" text-anchor="middle">{lb["txt"]}</text>')
     xset = sorted({a for s in series for a, _ in s["pts"]})
     if 1 < len(xset) <= 800:
         bw = iw / len(xset)
@@ -1113,10 +1152,21 @@ def sec_topics(w):
         per.setdefault(r["topic"], []).append(r)
     h.append(f'<p class="muted">Covers the {len(per)} topic(s) for which the JMX exporter returned a '
              'per-topic series in this window — not every topic on the cluster. A topic with no traffic '
-             'may be absent here entirely, so this is not a topic inventory.</p>')
+             'may be absent here entirely, so this is not a topic inventory. '
+             f'<b>Window: {short_ts(w.start)} → {short_ts(w.end)} IST on '
+             f'{(w.start or " ").split(" ")[0]}</b> ({f1((w.dur or 0)/60)} min, {w.samples} samples); '
+             'every rate below is per second, measured over that window.</p>')
+    h.append('<p class="muted"><b>Producer</b> ok/fail are produce requests the brokers accepted vs '
+             'rejected for that topic; <b>consumer</b> ok/fail are fetch requests. A failure here is a '
+             'broker-side rejection — <span class="mono">NOT_ENOUGH_REPLICAS</span>, unknown '
+             'topic/partition, malformed request. A client timeout that never reached the broker is '
+             'not counted; that one only shows up in the producer\'s own metrics.</p>')
     h.append('<div class="tbl-wrap"><table><tr><th>Topic</th><th class="num">MB/s in pk</th>'
              '<th class="num">MB/s in avg</th><th class="num">MB/s out pk</th>'
-             '<th class="num">msg/s pk</th><th class="num">share of ingress</th></tr>')
+             '<th class="num">msg/s pk</th>'
+             '<th class="num">producer ok/s</th><th class="num">producer fail/s</th>'
+             '<th class="num">consumer ok/s</th><th class="num">consumer fail/s</th>'
+             '<th class="num">share of ingress</th><th>Reading</th></tr>')
     tot_av = sum((av(per[t], "bytes_in_mb_s") or 0) for t in per)
     tot = tot_av or 1          # share denominator only; never printed
     TI = TO = TM = 0.0
@@ -1127,14 +1177,45 @@ def sec_topics(w):
         sh = (ia or 0) / tot * 100
         bw = max(1, int(round(sh * 1.5)))
         TI += i_ or 0; TO += o_ or 0; TM += m_ or 0
-        h.append(f'<tr><td class="mono">{esc(t)}</td><td class="num">{f1(i_,"",2)}</td>'
-                 f'<td class="num">{f1(ia,"",2)}</td><td class="num">{f1(o_,"",2)}</td>'
+        po, pf = av(rs, "produce_ok_s"), pk(rs, "produce_fail_s")
+        fo, ff = av(rs, "fetch_ok_s"), pk(rs, "fetch_fail_s")
+        # A rejection rate is the finding; everything else here is throughput.
+        if pf and pf > 0:
+            rcls, rtxt = "bad", "produce requests being REJECTED by the brokers"
+        elif ff and ff > 0:
+            rcls, rtxt = "bad", "fetch requests being rejected"
+        elif (po or 0) > 0 or (fo or 0) > 0:
+            rcls, rtxt = "good", "all requests accepted"
+        elif po is None and fo is None:
+            rcls, rtxt = "", "request outcomes not published by the exporter"
+        else:
+            rcls, rtxt = "", "no requests for this topic in the window"
+        pfc = (f'<span class="pill bad">{f1(pf,"",2)}</span>' if (pf and pf > 0) else f1(pf, "", 2))
+        ffc = (f'<span class="pill bad">{f1(ff,"",2)}</span>' if (ff and ff > 0) else f1(ff, "", 2))
+        h.append(f'<tr><td class="mono">{esc(t)}</td><td class="num">{fv(i_)}</td>'
+                 f'<td class="num">{fv(ia)}</td><td class="num">{fv(o_)}</td>'
                  f'<td class="num">{n0(m_)}</td>'
-                 f'<td class="num"><span class="bar" style="width:{bw}px"></span> {sh:.1f}%</td></tr>')
+                 f'<td class="num">{f1(po,"",2)}</td><td class="num">{pfc}</td>'
+                 f'<td class="num">{f1(fo,"",2)}</td><td class="num">{ffc}</td>'
+                 f'<td class="num"><span class="bar" style="width:{bw}px"></span> {sh:.1f}%</td>'
+                 f'<td class="muted {rcls}">{rtxt}</td></tr>')
+    # When nothing was measured the total must be a dash too — a 0.00 under a
+    # column of dashes reads as "zero failures", which is a different claim
+    # from "we could not tell".
+    def _tot(col, how):
+        v = [(how(per[t], col)) for t in per]
+        v = [x for x in v if x is not None]
+        return sum(v) if v else None
+    T_po = _tot("produce_ok_s", av)
+    T_pf = _tot("produce_fail_s", pk)
+    T_fo = _tot("fetch_ok_s", av)
+    T_ff = _tot("fetch_fail_s", pk)
     h.append(f'<tr class="tot"><td>TOTAL <span class="muted">({len(per)} topics)</span></td>'
-             f'<td class="num">{f1(TI,"",2)}</td><td class="num">{f1(tot_av,"",2)}</td>'
-             f'<td class="num">{f1(TO,"",2)}</td><td class="num">{n0(TM)}</td>'
-             f'<td class="num">100%</td></tr>')
+             f'<td class="num">{fv(TI)}</td><td class="num">{fv(tot_av)}</td>'
+             f'<td class="num">{fv(TO)}</td><td class="num">{n0(TM)}</td>'
+             f'<td class="num">{f1(T_po,"",2)}</td><td class="num">{f1(T_pf,"",2)}</td>'
+             f'<td class="num">{f1(T_fo,"",2)}</td><td class="num">{f1(T_ff,"",2)}</td>'
+             f'<td class="num">100%</td><td class="muted"></td></tr>')
     h.append("</table></div>")
     return "".join(h)
 
@@ -1146,7 +1227,8 @@ def sec_infra(w):
         for r in w.pod:
             per.setdefault(r["pod"], []).append(r)
         h.append('<div class="tbl-wrap"><table><tr><th>Pod</th><th>Role</th><th>Node</th>'
-                 '<th class="num">CPU pk</th><th class="num">Mem pk Mi</th>'
+                 '<th class="num">CPU avg</th><th class="num">CPU pk</th>'
+                 '<th class="num">Mem avg Mi</th><th class="num">Mem pk Mi</th>'
                  '<th class="num">Heap pk Mi</th><th class="num">GC/s pk</th>'
                  '<th class="num">Restarts<br><span style="font-weight:400;text-transform:none">(pod lifetime)</span></th><th>Ready</th></tr>')
         jper = {}
@@ -1167,13 +1249,41 @@ def sec_infra(w):
             gc_c = ('<span class="pill mut">not measured</span>' if w.gc_unmeasured
                     else f1(pk(js, "gc_count_s"), "", 2))
             h.append(f'<tr><td class="mono">{esc(p)}</td><td class="muted">{esc(rs[-1].get("role","–"))}</td>'
-                     f'<td class="mono">{esc(node)}</td><td class="num">{n0(pk(rs,"cpu_m"))}m</td>'
+                     f'<td class="mono">{esc(node)}</td>'
+                     f'<td class="num">{n0(av(rs,"cpu_m"))}m</td>'
+                     f'<td class="num">{n0(pk(rs,"cpu_m"))}m</td>'
+                     f'<td class="num">{n0(av(rs,"mem_mi"))}</td>'
                      f'<td class="num">{n0(pk(rs,"mem_mi"))}</td>'
                      f'<td class="num">{heap_c}</td>'
                      f'<td class="num">{gc_c}</td>'
                      f'<td class="num"><span class="pill {rcls}">{n0(rc)}</span></td>'
                      f'<td class="muted">{esc(rs[-1].get("ready","–"))}</td></tr>')
         h.append("</table></div>")
+
+        # ---- resource behaviour over the window ----
+        watch = [q for q in sorted(per) if per[q][-1].get("role") in ("broker", "controller")] or sorted(per)
+        cols = [S1, S2, S3, S4, S5, "#8b5cf6", "#0ea5e9", "#84cc16"]
+        for col, lbl, title, note in (
+            ("cpu_m", "millicores", "CPU per pod across the window",
+             "A broker pinned near its CPU limit cannot drain its request queue, so read this "
+             "together with handler idle in section 3."),
+            ("mem_mi", "Mi", "Memory (container RSS) per pod across the window",
+             "This is the container's resident memory, which includes the JVM heap plus page cache "
+             "and off-heap buffers — it is normally flat and well above heap."),
+        ):
+            series = []
+            for n, q in enumerate(watch[:8]):
+                pts = w.pts(per[q], col)
+                if pts:
+                    series.append({"name": "-".join(q.split("-")[-2:]), "color": cols[n % len(cols)],
+                                   "pts": pts})
+            if not series:
+                continue
+            h.append(f'<h3>{title}</h3>')
+            h.append('<div class="chart">' + svg(series, ylab=lbl, xfmt=w.xfmt()) + "</div>")
+            h.append(legend([(x["name"], x["color"]) for x in series]))
+            h.append(f'<p class="muted">{note}</p>')
+
         # co-location
         last = {p: per[p][-1] for p in per}
         bynode = {}

@@ -139,6 +139,20 @@ flag = rd("fetchlag")
 shrink, expand = rd("isrshrink"), rd("isrexpand")
 heap, gcc, gct = rd("heap"), rd("gcc"), rd("gct")
 t_in, t_out, t_msg = rd("t_in"), rd("t_out"), rd("t_msg")
+# Per-topic request outcomes. The broker publishes TOTAL and FAILED separately,
+# so success is the difference — never negative, and blank when the series is
+# absent rather than a misleading zero.
+t_ptot, t_pfail = rd("t_ptot"), rd("t_pfail")
+t_ftot, t_ffail = rd("t_ftot"), rd("t_ffail")
+
+
+def ok_fail(topic, tot, fail, have_tot, have_fail):
+    """(success/s, failure/s) for one topic, or (None, None) when unmeasured"""
+    f = fail.get(topic, 0.0) if have_fail else None
+    if not have_tot:
+        return (None, f)
+    o = tot.get(topic, 0.0) - (f or 0.0)
+    return (o if o > 0 else 0.0, f)
 l_tot, l_q, l_l = coherent_latency(rd2("l_tot"), rd2("l_q"), rd2("l_l"))
 l_r = rd("l_r")
 pvcu, pvcc = rd("pvcu"), rd("pvcc")
@@ -367,8 +381,14 @@ if t_in:
     for t in sorted(t_in, key=lambda k: -t_in[k])[:10]:
         A(f"  {squeeze(t,41):<42}{t_in[t]/MB:10.3f}{t_out.get(t,0)/MB:10.3f}{t_msg.get(t,0):10.0f}")
     for t in t_in:
+        _po, _pf = ok_fail(t, t_ptot, t_pfail, "ptot" in HAVE, "pfail" in HAVE)
+        _fo, _ff = ok_fail(t, t_ftot, t_ffail, "ftot" in HAVE, "ffail" in HAVE)
         csv_append(E("C_TOP"), [TS, EL, t, f"{t_in[t]/MB:.4f}",
-                                f"{t_out.get(t,0)/MB:.4f}", f"{t_msg.get(t,0):.1f}"])
+                                f"{t_out.get(t,0)/MB:.4f}", f"{t_msg.get(t,0):.1f}",
+                                "" if _po is None else f"{_po:.2f}",
+                                "" if _pf is None else f"{_pf:.2f}",
+                                "" if _fo is None else f"{_fo:.2f}",
+                                "" if _ff is None else f"{_ff:.2f}"])
 
 # ---- 5. pods / JVM / disk ---------------------------------------------------
 A("")

@@ -15,7 +15,7 @@ import os, re, csv, argparse, datetime, textwrap, statistics as st
 
 # Bumped whenever the report's judgement changes, so a file can always be traced
 # to the build that produced it. Printed in the masthead and by --version.
-KR_VERSION = "2026-10-16.1 (pod CPU/mem charts, topic ok+fail, chart label fixes)"
+KR_VERSION = "2026-10-16.2 (offsets-vs-JMX verification)"
 
 def read(p):
     if not p or not os.path.exists(p):
@@ -437,6 +437,7 @@ class Win:
         self.clu, self.brk, self.top = g("cluster"), g("broker"), g("topic")
         self.lat, self.jvm, self.pod = g("latency"), g("jvm"), g("pod")
         self.dsk, self.lag, self.hlt = g("disk"), g("lag"), g("health")
+        self.off = g("offsets")
         self.ok = bool(self.clu or self.brk or self.pod)
         c = self.clu
         self.samples = len(c)
@@ -651,6 +652,60 @@ class Win:
             self.heap_bad = set(over)
         else:
             self.heap_bad = set()
+
+        # ---- independent verification of the message rate ----
+        # A JMX rate is derived; a partition end offset is a count the broker
+        # maintains itself. Differencing the offsets gives messages-produced
+        # with no dependence on the metrics pipeline, so the two numbers either
+        # agree or one of them is wrong — which is the only way to answer
+        # "does this match the cluster?" without hand-checking.
+        #
+        # The offsets are sampled on the deep-CLI cycle, less often than JMX, so
+        # the comparison is made over the offset sub-window only. Comparing a
+        # partial offset delta against the full-window JMX integral would
+        # manufacture a disagreement.
+        self.xver = []
+        if self.off and self.top:
+            optop = {}
+            for r in self.off:
+                t = r.get("topic", "")
+                e = F(r.get("elapsed_s"))
+                v = F(r.get("end_offset"))
+                if t and e is not None and v is not None:
+                    optop.setdefault(t, {}).setdefault(e, 0.0)
+                    optop[t][e] += v
+            jm = {}
+            for r in self.top:
+                jm.setdefault(r.get("topic", ""), []).append(r)
+            for t, byel in sorted(optop.items()):
+                els = sorted(byel)
+                if len(els) < 2:
+                    continue
+                span = els[-1] - els[0]
+                if span <= 0:
+                    continue
+                produced = byel[els[-1]] - byel[els[0]]
+                if produced < 0:          # retention deleted segments; not comparable
+                    continue
+                rows = [r for r in jm.get(t, [])
+                        if (F(r.get("elapsed_s")) or -1) >= els[0]
+                        and (F(r.get("elapsed_s")) or -1) <= els[-1]]
+                rates = _vals(rows, "messages_in_s")
+                if not rates:
+                    continue
+                expect = sum(rates) / len(rates) * span
+                self.xver.append({"topic": t, "span": span, "offsets": produced,
+                                  "jmx": expect,
+                                  "ratio": (expect / produced) if produced > 0 else None})
+
+        bad_x = [x for x in getattr(self, "xver", [])
+                 if x["ratio"] is not None and x["offsets"] > 50 and not (0.75 <= x["ratio"] <= 1.33)]
+        if bad_x:
+            names = ", ".join(f"{x['topic']} ({x['ratio']:.2f}x)" for x in bad_x[:3])
+            self.xchecks.append(
+                f"The JMX message rate disagrees with the partition offsets on {len(bad_x)} topic(s): "
+                f"{names}. The offsets are the brokers' own counts, so where they disagree the JMX "
+                "rate is the suspect one. Section 6 shows both figures side by side.")
 
         # ---- did any load actually reach this cluster? ----
         # Internal topics carry traffic whether or not a test is running:
@@ -1217,6 +1272,49 @@ def sec_topics(w):
              f'<td class="num">{f1(T_fo,"",2)}</td><td class="num">{f1(T_ff,"",2)}</td>'
              f'<td class="num">100%</td><td class="muted"></td></tr>')
     h.append("</table></div>")
+
+    # ---- the verification table ----
+    xv = getattr(w, "xver", [])
+    if xv:
+        h.append('<h3>Verification — message counts from partition offsets vs JMX</h3>')
+        h.append('<p class="muted">The <b>offsets</b> column is the partition end offset at the end of '
+                 'the sub-window minus the offset at the start: a count the brokers maintain themselves, '
+                 'with no dependence on the metrics pipeline. The <b>JMX</b> column is the '
+                 '<span class="mono">messages_in_s</span> rate integrated over the same span. Two '
+                 'independent measurements of one quantity — if they agree, the rate elsewhere in this '
+                 'report is trustworthy; if they do not, this table says so rather than leaving it to be '
+                 'found by hand.</p>')
+        h.append('<div class="tbl-wrap"><table><tr><th>Topic</th><th class="num">span s</th>'
+                 '<th class="num">messages (offsets)</th><th class="num">messages (JMX)</th>'
+                 '<th class="num">JMX / offsets</th><th>Verdict</th></tr>')
+        worst = None
+        for x in sorted(xv, key=lambda q: -q["offsets"]):
+            rt = x["ratio"]
+            if x["offsets"] == 0 and x["jmx"] < 1:
+                cls, txt = "", "no traffic on either measurement — consistent"
+            elif rt is None:
+                cls, txt = "", "no offset movement to compare against"
+            elif 0.9 <= rt <= 1.1:
+                cls, txt = "good", "agree within 10% — rate confirmed"
+            elif 0.75 <= rt <= 1.33:
+                cls, txt = "warn", "within sampling error of each other, but not tight"
+            else:
+                cls, txt = "bad", ("JMX reads HIGH against the offsets" if rt > 1
+                                   else "JMX reads LOW against the offsets")
+                if worst is None or abs(rt - 1) > abs(worst - 1):
+                    worst = rt
+            h.append(f'<tr><td class="mono">{esc(x["topic"])}</td>'
+                     f'<td class="num">{n0(x["span"])}</td>'
+                     f'<td class="num">{n0(x["offsets"])}</td>'
+                     f'<td class="num">{n0(x["jmx"])}</td>'
+                     f'<td class="num">{"–" if rt is None else f"{rt:.2f}x"}</td>'
+                     f'<td class="muted"><span class="pill {cls}">{txt}</span></td></tr>')
+        h.append("</table></div>")
+        h.append('<p class="muted">Offsets are read on the deep-CLI cycle, so the span is shorter than '
+                 'the full window and a topic whose retention deleted segments mid-window is skipped '
+                 'rather than reported as negative. A compacted topic such as '
+                 '<span class="mono">__consumer_offsets</span> can legitimately show fewer offsets than '
+                 'messages, because compaction removes records after they are counted.</p>')
     return "".join(h)
 
 

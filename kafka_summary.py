@@ -79,6 +79,23 @@ def main():
     g = lambda n: read(os.path.join(a.dir, f"kafka_{n}_{tag}.csv"))
     clu, brk, top = g("cluster"), g("broker"), g("topic")
     pod, jvm, dsk, lag = g("pod"), g("jvm"), g("disk"), g("lag")
+    off = g("offsets")
+
+    # messages actually written, from the brokers' own partition offsets
+    produced = {}
+    byt = defaultdict(lambda: defaultdict(float))
+    for r in off:
+        t = r.get("topic", "")
+        try:
+            e, v = float(r["elapsed_s"]), float(r["end_offset"])
+        except (KeyError, ValueError, TypeError):
+            continue
+        if t:
+            byt[t][e] += v
+    for t, m in byt.items():
+        els = sorted(m)
+        if len(els) >= 2 and m[els[-1]] - m[els[0]] >= 0:
+            produced[t] = (m[els[-1]] - m[els[0]], els[-1] - els[0])
 
     info = {}
     ri = os.path.join(a.dir, "run_info.txt")
@@ -162,6 +179,8 @@ def main():
             mb_out_peak=agg(rs, "bytes_out_mb_s", "max"),
             msg_s_peak=agg(rs, "messages_in_s", "max"),
             msg_s_avg=agg(rs, "messages_in_s", "avg"),
+            messages_from_offsets=(f"{produced[t][0]:.0f}" if t in produced else ""),
+            offset_span_s=(f"{produced[t][1]:.0f}" if t in produced else ""),
             produce_ok_s_avg=agg(rs, "produce_ok_s", "avg"),
             produce_fail_s_peak=agg(rs, "produce_fail_s", "max"),
             fetch_ok_s_avg=agg(rs, "fetch_ok_s", "avg"),

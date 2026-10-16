@@ -44,7 +44,7 @@ set -u
 # Bump on every change. Printed at startup, by --version and by --check, and
 # written into each run folder, so there is never any doubt about which build
 # produced a given set of CSVs.
-PK_VERSION="2026-10-16.1 (per-topic produce/fetch outcomes, summary CSV)"
+PK_VERSION="2026-10-16.2 (end-offset capture for independent verification)"
 
 CHECK=0
 case "${1:-}" in
@@ -720,6 +720,7 @@ C_POD="$OUTDIR/kafka_pod_${TAG}.csv"
 C_DSK="$OUTDIR/kafka_disk_${TAG}.csv"
 C_LAG="$OUTDIR/kafka_lag_${TAG}.csv"
 C_HLT="$OUTDIR/kafka_health_${TAG}.csv"
+C_OFF="$OUTDIR/kafka_offsets_${TAG}.csv"
 
 echo "ts_ist,elapsed_s,active_controllers,offline_partitions,under_replicated,unclean_elections,partitions_total,leaders_total,bytes_in_mb_s,bytes_out_mb_s,messages_in_s" > "$C_CLU"
 echo "ts_ist,elapsed_s,pod,bytes_in_mb_s,bytes_out_mb_s,messages_in_s,handler_idle_pct,network_idle_pct,request_queue,response_queue,purgatory,under_replicated,partitions,leaders,isr_shrink_s,isr_expand_s,follower_lag,at_min_isr,purgatory_produce" > "$C_BRK"
@@ -730,6 +731,7 @@ echo "ts_ist,elapsed_s,pod,role,node,phase,ready,restarts,cpu_m,mem_mi" > "$C_PO
 echo "ts_ist,elapsed_s,pod,pvc,used_gb,capacity_gb,used_pct" > "$C_DSK"
 echo "ts_ist,elapsed_s,group,topic,lag,state,members" > "$C_LAG"
 echo "ts_ist,elapsed_s,check,value,detail" > "$C_HLT"
+echo "ts_ist,elapsed_s,topic,partition,end_offset" > "$C_OFF"
 
 role_of() {
   printf '%s\n' "$BROKERS"     | grep -qx "$1" && { echo broker; return; }
@@ -1005,6 +1007,25 @@ while :; do
       { lag=$6+0; if (lag<0) lag=0; k=$1 SUBSEP $2; agg[k]+=lag; mem[k]++ }
       END { for (k in agg) { split(k,a,SUBSEP); printf "%s,%s,%s,%s,%d,,%d\n", ts, el, a[1], a[2], agg[k], mem[k] } }
     ' "$TMP/cg" >> "$C_LAG"
+    # Keep the END OFFSETS. A JMX rate is a derived number; an end offset is a
+    # count the broker itself maintains, so the two together verify each other.
+    # kafka-get-offsets covers every topic; the consumer-group output only
+    # covers topics that have a group, so it is the fallback.
+    : > "$TMP/off"
+    oc -n "$NS" exec "$BPOD" -c kafka -- sh -c \
+      "$KBIN/kafka-get-offsets.sh --bootstrap-server $BOOTSTRAP --time latest 2>/dev/null" \
+      > "$TMP/off" 2>/dev/null || : > "$TMP/off"
+    if [ -s "$TMP/off" ]; then
+      # topic:partition:offset
+      awk -F: -v ts="$TS" -v el="$EL" 'NF>=3 && $3 ~ /^[0-9]+$/ {printf "%s,%s,%s,%s,%s\n", ts, el, $1, $2, $3}' \
+        "$TMP/off" >> "$C_OFF"
+    else
+      awk -v ts="$TS" -v el="$EL" '
+        $1=="GROUP" || NF<6 { next }
+        { k=$2 SUBSEP $3; if ($5+0 > seen[k]) seen[k]=$5+0 }
+        END { for (k in seen) { split(k,a,SUBSEP); printf "%s,%s,%s,%s,%d\n", ts, el, a[1], a[2], seen[k] } }
+      ' "$TMP/cg" >> "$C_OFF"
+    fi
     TOTLAG=$(awk -F, -v t="$TS" '$1==t{s+=$5} END{print s+0}' "$C_LAG")
     awk -v m="$MAX_LAG" -v n="$TOTLAG" 'BEGIN{exit !(n>m)}' && MAX_LAG="$TOTLAG"
     LAGLINE="   consumer lag (all groups): $TOTLAG"

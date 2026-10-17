@@ -44,7 +44,7 @@ set -u
 # Bump on every change. Printed at startup, by --version and by --check, and
 # written into each run folder, so there is never any doubt about which build
 # produced a given set of CSVs.
-PK_VERSION="2026-10-16.2 (end-offset capture for independent verification)"
+PK_VERSION="2026-10-16.3 (cumulative counters for exact totals)"
 
 CHECK=0
 case "${1:-}" in
@@ -339,6 +339,19 @@ rate_expr() {
     *_total|*_count) echo "rate($1{$_sel}[${2}])" ;;
     *)               echo "$1{$_sel}" ;;
   esac
+}
+
+# cum_expr METRIC [LABELSEL] -> the RAW cumulative counter, un-rated.
+#
+# A rate answers "how fast"; only the counter itself answers "how many". The
+# report needs totals — messages produced, requests that succeeded, requests
+# that failed — and integrating a sampled rate over a window accumulates every
+# sampling error in it. Differencing the counter first-to-last is exact: it is
+# the brokers' own running count, and it cannot drift.
+cum_expr() {
+  _sel="namespace=\"$NS\""
+  [ -n "${2:-}" ] && _sel="$_sel,$2"
+  echo "$1{$_sel}"
 }
 
 # Why the topic matcher matters — this cost a factor of two on every throughput
@@ -724,12 +737,12 @@ C_OFF="$OUTDIR/kafka_offsets_${TAG}.csv"
 
 echo "ts_ist,elapsed_s,active_controllers,offline_partitions,under_replicated,unclean_elections,partitions_total,leaders_total,bytes_in_mb_s,bytes_out_mb_s,messages_in_s" > "$C_CLU"
 echo "ts_ist,elapsed_s,pod,bytes_in_mb_s,bytes_out_mb_s,messages_in_s,handler_idle_pct,network_idle_pct,request_queue,response_queue,purgatory,under_replicated,partitions,leaders,isr_shrink_s,isr_expand_s,follower_lag,at_min_isr,purgatory_produce" > "$C_BRK"
-echo "ts_ist,elapsed_s,topic,bytes_in_mb_s,bytes_out_mb_s,messages_in_s,produce_ok_s,produce_fail_s,fetch_ok_s,fetch_fail_s" > "$C_TOP"
+echo "ts_ist,elapsed_s,topic,bytes_in_mb_s,bytes_out_mb_s,messages_in_s,produce_ok_s,produce_fail_s,fetch_ok_s,fetch_fail_s,messages_cum,produce_req_cum,produce_fail_cum,fetch_req_cum,fetch_fail_cum,bytes_in_cum,bytes_out_cum" > "$C_TOP"
 echo "ts_ist,elapsed_s,request,total_ms,queue_ms,local_ms,req_per_s" > "$C_LAT"
 echo "ts_ist,elapsed_s,pod,heap_used_mb,gc_count_s,gc_time_ms_s" > "$C_JVM"
 echo "ts_ist,elapsed_s,pod,role,node,phase,ready,restarts,cpu_m,mem_mi" > "$C_POD"
 echo "ts_ist,elapsed_s,pod,pvc,used_gb,capacity_gb,used_pct" > "$C_DSK"
-echo "ts_ist,elapsed_s,group,topic,lag,state,members" > "$C_LAG"
+echo "ts_ist,elapsed_s,group,topic,lag,state,members,current_offset,log_end_offset" > "$C_LAG"
 echo "ts_ist,elapsed_s,check,value,detail" > "$C_HLT"
 echo "ts_ist,elapsed_s,topic,partition,end_offset" > "$C_OFF"
 
@@ -751,6 +764,36 @@ REMAIN=""; TOTSAMP=""; ETA=""; PROG=""
 finish() {
   END_IST=$(TZ=Asia/Kolkata date '+%Y-%m-%d %H:%M:%S')
   EL=$(( $(date +%s) - T0 ))
+
+  # ---------- one last offset reading, always ----------
+  # Messages produced and messages consumed are both counter DIFFERENCES, so
+  # they need a reading at each end of the window. The deep CLI cycle runs every
+  # Nth sample, so a short run could end with only one reading and no total at
+  # all. Taking a closing reading here means a first and a last always exist,
+  # whatever the run length or interval.
+  if [ "${CLI_OK:-0}" -eq 1 ] && [ -n "${C_LAG:-}" ]; then
+    _ets=$(TZ=Asia/Kolkata date '+%Y-%m-%d %H:%M:%S')
+    oc -n "$NS" exec "$BPOD" -c kafka -- sh -c \
+      "$KBIN/kafka-consumer-groups.sh --bootstrap-server $BOOTSTRAP --describe --all-groups 2>/dev/null" \
+      > "$TMP/cg_end" 2>/dev/null || : > "$TMP/cg_end"
+    if [ -s "$TMP/cg_end" ]; then
+      awk -v ts="$_ets" -v el="$EL" '
+        $1=="GROUP" || NF<6 { next }
+        { lag=$6+0; if (lag<0) lag=0; k=$1 SUBSEP $2; agg[k]+=lag; mem[k]++
+          if ($4 ~ /^[0-9]+$/) cur[k]+=$4
+          if ($5 ~ /^[0-9]+$/) leo[k]+=$5 }
+        END { for (k in agg) { split(k,a,SUBSEP)
+                printf "%s,%s,%s,%s,%d,,%d,%d,%d\n", ts, el, a[1], a[2], agg[k], mem[k], cur[k], leo[k] } }
+      ' "$TMP/cg_end" >> "$C_LAG"
+    fi
+    oc -n "$NS" exec "$BPOD" -c kafka -- sh -c \
+      "$KBIN/kafka-get-offsets.sh --bootstrap-server $BOOTSTRAP --time latest 2>/dev/null" \
+      > "$TMP/off_end" 2>/dev/null || : > "$TMP/off_end"
+    if [ -s "$TMP/off_end" ] && [ -n "${C_OFF:-}" ]; then
+      awk -F: -v ts="$_ets" -v el="$EL" 'NF>=3 && $3 ~ /^[0-9]+$/ {printf "%s,%s,%s,%s,%s\n", ts, el, $1, $2, $3}' \
+        "$TMP/off_end" >> "$C_OFF"
+    fi
+  fi
   echo
   echo "=================================================================================="
   echo "   PERF-KAFKA WINDOW SUMMARY   (tag: $TAG, namespace: $NS)"
@@ -926,6 +969,19 @@ while :; do
     else : > "$_f"; fi
   done
 
+  # ---------- CUMULATIVE counters per topic: the totals ----------
+  # Same five series, un-rated. The report differences these across the window
+  # to get exact counts of messages produced and of produce/fetch requests that
+  # succeeded or failed.
+  for _pair in "c_msg:$M_MSGIN" "c_ptot:$M_PRODTOT" "c_pfail:$M_PRODFAIL" \
+               "c_ftot:$M_FETCHTOT" "c_ffail:$M_FETCHFAIL" \
+               "c_bin:$M_BYTESIN" "c_bout:$M_BYTESOUT"; do
+    _f="$TMP/${_pair%%:*}"; _m="${_pair#*:}"
+    if [ -n "$_m" ] && [ -n "$TOPIC_LABEL" ]; then
+      qj "sum by($TOPIC_LABEL) ($(cum_expr "$_m" 'topic!=""'))" "$TOPIC_LABEL" > "$_f" 2>/dev/null || :
+    else : > "$_f"; fi
+  done
+
   # ---------- Thanos: latency by request type ----------
   : > "$TMP/lat"
   if [ -n "$M_TOTTIME" ]; then
@@ -1004,8 +1060,18 @@ while :; do
     # GROUP TOPIC PARTITION CURRENT-OFFSET LOG-END-OFFSET LAG CONSUMER-ID HOST CLIENT-ID
     awk -v ts="$TS" -v el="$EL" '
       $1=="GROUP" || NF<6 { next }
-      { lag=$6+0; if (lag<0) lag=0; k=$1 SUBSEP $2; agg[k]+=lag; mem[k]++ }
-      END { for (k in agg) { split(k,a,SUBSEP); printf "%s,%s,%s,%s,%d,,%d\n", ts, el, a[1], a[2], agg[k], mem[k] } }
+      {
+        lag=$6+0; if (lag<0) lag=0
+        k=$1 SUBSEP $2
+        agg[k]+=lag; mem[k]++
+        # CURRENT-OFFSET and LOG-END-OFFSET, summed over the partitions of this
+        # group/topic. "-" appears for an assigned-but-never-committed
+        # partition, so only add a real number.
+        if ($4 ~ /^[0-9]+$/) cur[k]+=$4
+        if ($5 ~ /^[0-9]+$/) leo[k]+=$5
+      }
+      END { for (k in agg) { split(k,a,SUBSEP)
+              printf "%s,%s,%s,%s,%d,,%d,%d,%d\n", ts, el, a[1], a[2], agg[k], mem[k], cur[k], leo[k] } }
     ' "$TMP/cg" >> "$C_LAG"
     # Keep the END OFFSETS. A JMX rate is a derived number; an end offset is a
     # count the broker itself maintains, so the two together verify each other.

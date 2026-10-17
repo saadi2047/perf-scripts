@@ -52,6 +52,16 @@ def agg(rows, col, how):
     return ""
 
 
+def delta(rows, col):
+    """last minus first for a cumulative counter; blank on a counter reset so a
+    broker restart never shows up as a negative or a wrapped total"""
+    v = nums(rows, col)
+    if len(v) < 2:
+        return ""
+    d = v[-1] - v[0]
+    return "" if d < 0 else f"{d:.0f}"
+
+
 def group(rows, key):
     g = defaultdict(list)
     for r in rows:
@@ -179,6 +189,13 @@ def main():
             mb_out_peak=agg(rs, "bytes_out_mb_s", "max"),
             msg_s_peak=agg(rs, "messages_in_s", "max"),
             msg_s_avg=agg(rs, "messages_in_s", "avg"),
+            messages_produced_total=delta(rs, "messages_cum"),
+            produce_requests_total=delta(rs, "produce_req_cum"),
+            produce_requests_failed=delta(rs, "produce_fail_cum"),
+            fetch_requests_total=delta(rs, "fetch_req_cum"),
+            fetch_requests_failed=delta(rs, "fetch_fail_cum"),
+            bytes_in_total=delta(rs, "bytes_in_cum"),
+            bytes_out_total=delta(rs, "bytes_out_cum"),
             messages_from_offsets=(f"{produced[t][0]:.0f}" if t in produced else ""),
             offset_span_s=(f"{produced[t][1]:.0f}" if t in produced else ""),
             produce_ok_s_avg=agg(rs, "produce_ok_s", "avg"),
@@ -194,6 +211,7 @@ def main():
         if not grp:
             continue
         row("consumer_group", f"{grp} / {t}",
+            messages_consumed_total=delta(rs, "current_offset"),
             lag_peak=agg(rs, "lag", "max"), lag_final=agg(rs, "lag", "last"),
             members=rs[-1].get("members", ""))
 

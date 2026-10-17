@@ -15,7 +15,7 @@ import os, re, csv, argparse, datetime, textwrap, statistics as st
 
 # Bumped whenever the report's judgement changes, so a file can always be traced
 # to the build that produced it. Printed in the masthead and by --version.
-KR_VERSION = "2026-10-16.2 (offsets-vs-JMX verification)"
+KR_VERSION = "2026-10-16.3 (message totals — producer/consumer success and failure)"
 
 def read(p):
     if not p or not os.path.exists(p):
@@ -653,6 +653,73 @@ class Win:
         else:
             self.heap_bad = set()
 
+        # ---- TOTALS: how many, not how fast ----------------------------
+        # Every other figure in this report is a rate. A rate answers "how
+        # fast", and the question "how many messages did we produce, and how
+        # many requests succeeded or failed" needs a count. These counters are
+        # cumulative, so last-minus-first over the window is that count exactly
+        # — no integration of a sampled rate, and no accumulated sampling error.
+        #
+        # A broker restart resets its counter, which makes the difference
+        # negative. That is detected and the topic reported as unusable rather
+        # than as a negative or a wrapped-around total.
+        def _delta(rows, col):
+            seq = [(F(r.get("elapsed_s"), 0) or 0, F(r.get(col)))
+                   for r in rows if F(r.get(col)) is not None]
+            if len(seq) < 2:
+                return None
+            seq.sort()
+            d = seq[-1][1] - seq[0][1]
+            return d if d >= 0 else "reset"
+
+        self.tot_rows = []
+        self.tot_reset = []
+        tper = {}
+        for r in self.top:
+            tper.setdefault(r.get("topic", ""), []).append(r)
+        for t, rs in sorted(tper.items()):
+            row = {"topic": t}
+            bad = False
+            for key, col in (("msgs", "messages_cum"), ("preq", "produce_req_cum"),
+                             ("pfail", "produce_fail_cum"), ("freq", "fetch_req_cum"),
+                             ("ffail", "fetch_fail_cum"), ("bin", "bytes_in_cum"),
+                             ("bout", "bytes_out_cum")):
+                v = _delta(rs, col)
+                if v == "reset":
+                    bad = True
+                    v = None
+                row[key] = v
+            if bad:
+                self.tot_reset.append(t)
+            # produce/fetch OK = total requests minus the failed ones
+            for ok, tot, fl in (("pok", "preq", "pfail"), ("fok", "freq", "ffail")):
+                if row[tot] is None:
+                    row[ok] = None
+                else:
+                    row[ok] = max(0.0, row[tot] - (row[fl] or 0.0))
+            if any(row[k] is not None for k in ("msgs", "preq", "freq")):
+                self.tot_rows.append(row)
+        self.have_totals = bool(self.tot_rows)
+
+        # consumer side: messages actually consumed, per group/topic, from the
+        # committed offset. A fetch-request count cannot answer this — one fetch
+        # returns many records, or none at all.
+        self.cons_rows = []
+        gper = {}
+        for r in self.lag:
+            gper.setdefault((r.get("group", ""), r.get("topic", "")), []).append(r)
+        for (grp, t), rs in sorted(gper.items()):
+            if not grp:
+                continue
+            d = _delta(rs, "current_offset")
+            self.cons_rows.append({
+                "group": grp, "topic": t,
+                "consumed": None if d == "reset" else d,
+                "lag_final": F(rs[-1].get("lag")),
+                "lag_peak": pk(rs, "lag"),
+                "members": F(rs[-1].get("members"))})
+        self.have_consumed = any(r["consumed"] is not None for r in self.cons_rows)
+
         # ---- independent verification of the message rate ----
         # A JMX rate is derived; a partition end offset is a count the broker
         # maintains itself. Differencing the offsets gives messages-produced
@@ -705,7 +772,7 @@ class Win:
             self.xchecks.append(
                 f"The JMX message rate disagrees with the partition offsets on {len(bad_x)} topic(s): "
                 f"{names}. The offsets are the brokers' own counts, so where they disagree the JMX "
-                "rate is the suspect one. Section 6 shows both figures side by side.")
+                "rate is the suspect one. Section 7 shows both figures side by side.")
 
         # ---- did any load actually reach this cluster? ----
         # Internal topics carry traffic whether or not a test is running:
@@ -1198,8 +1265,175 @@ def sec_lag(w):
     return "".join(h)
 
 
+def _fail_cell(v):
+    """a non-zero failure count is the finding, so it is flagged; zero is not"""
+    return f'<span class="pill bad">{n0(v)}</span>' if v else n0(v)
+
+
+def _pct_cell(fail, total, have):
+    if not have or not total:
+        return "–"
+    p = (fail or 0) / total * 100
+    return f'<span class="pill bad">{p:.2f}%</span>' if p > 0 else f"{p:.2f}%"
+
+
+def sec_totals(w):
+    """How many — the counts, as opposed to every other section's rates."""
+    h = ['<h2>6 · Message totals — producers and consumers</h2>']
+    h.append('<p class="muted">Counts for the whole window, not rates. Each figure is the broker\'s own '
+             'cumulative counter at the end of the window minus the same counter at the start, so it is '
+             'an exact count rather than a sampled rate multiplied out. '
+             f'<b>Window: {short_ts(w.start)} → {short_ts(w.end)} IST on '
+             f'{(w.start or " ").split(" ")[0]}</b> — {f1((w.dur or 0)/60)} min, {w.samples} samples.</p>')
+
+    if not w.have_totals:
+        h.append('<div class="verdict bad"><b>No totals available.</b> The cumulative counters '
+                 '(<span class="mono">messages_cum</span>, <span class="mono">produce_req_cum</span> and '
+                 'the rest) are absent from this capture, which means it was taken with a collector '
+                 'older than 2026-10-16.3. Re-run with the current '
+                 '<span class="mono">perf-kafka.sh</span> and the counts will appear here. The rates in '
+                 'section 7 are unaffected.</div>')
+        return "".join(h)
+
+    T = {k: 0.0 for k in ("msgs", "preq", "pok", "pfail", "freq", "fok", "ffail", "bin", "bout")}
+    seen = {k: False for k in T}
+    for r in w.tot_rows:
+        for k in T:
+            if r.get(k) is not None:
+                T[k] += r[k]
+                seen[k] = True
+    cons_tot = sum(r["consumed"] for r in w.cons_rows if r["consumed"] is not None) \
+        if w.have_consumed else None
+
+    # ---- the headline numbers ----
+    h.append('<div class="grid">')
+    h.append(kpi("Messages produced", n0(T["msgs"]) if seen["msgs"] else "–", "",
+                 "written to all topics in the window"))
+    h.append(kpi("Messages consumed", n0(cons_tot) if cons_tot is not None else "–", "",
+                 "committed by all consumer groups"))
+    h.append(kpi("Producer requests OK", n0(T["pok"]) if seen["preq"] else "–",
+                 "good" if seen["preq"] else "", "produce requests the brokers accepted"))
+    h.append(kpi("Producer requests FAILED", n0(T["pfail"]) if seen["pfail"] else "–",
+                 ("bad" if T["pfail"] > 0 else "good") if seen["pfail"] else "",
+                 "rejected by the brokers"))
+    h.append(kpi("Consumer requests OK", n0(T["fok"]) if seen["freq"] else "–",
+                 "good" if seen["freq"] else "", "fetch requests served"))
+    h.append(kpi("Consumer requests FAILED", n0(T["ffail"]) if seen["ffail"] else "–",
+                 ("bad" if T["ffail"] > 0 else "good") if seen["ffail"] else "",
+                 "fetch requests rejected"))
+    h.append("</div>")
+
+    # ---- producers ----
+    h.append('<h3>Producers — per topic</h3>')
+    h.append('<div class="tbl-wrap"><table><tr><th>Topic</th>'
+             '<th class="num">Messages produced</th><th class="num">MB in</th>'
+             '<th class="num">Requests OK</th><th class="num">Requests FAILED</th>'
+             '<th class="num">Fail %</th><th>Reading</th></tr>')
+    MB = 1024.0 * 1024.0
+    for r in sorted(w.tot_rows, key=lambda q: -(q.get("msgs") or 0)):
+        pr, pf, pk_ = r.get("preq"), r.get("pfail"), r.get("pok")
+        fp = (pf / pr * 100) if (pr and pf is not None and pr > 0) else None
+        if pf:
+            cls, txt = "bad", "produce requests REJECTED by the brokers"
+        elif pr:
+            cls, txt = "good", "every produce request accepted"
+        elif r.get("msgs"):
+            cls, txt = "", "messages written; request counters not published"
+        else:
+            cls, txt = "", "nothing produced to this topic in the window"
+        fpc = (f'<span class="pill bad">{fp:.2f}%</span>' if (fp and fp > 0)
+               else (f"{fp:.2f}%" if fp is not None else "–"))
+        h.append(f'<tr><td class="mono">{esc(r["topic"])}</td>'
+                 f'<td class="num">{n0(r.get("msgs"))}</td>'
+                 f'<td class="num">{fv(r["bin"] / MB) if r.get("bin") is not None else "–"}</td>'
+                 f'<td class="num">{n0(pk_)}</td>'
+                 f'<td class="num">{_fail_cell(pf)}</td>'
+                 f'<td class="num">{fpc}</td><td class="muted {cls}">{txt}</td></tr>')
+    h.append(f'<tr class="tot"><td>TOTAL <span class="muted">({len(w.tot_rows)} topics)</span></td>'
+             f'<td class="num">{n0(T["msgs"]) if seen["msgs"] else "–"}</td>'
+             f'<td class="num">{fv(T["bin"] / MB) if seen["bin"] else "–"}</td>'
+             f'<td class="num">{n0(T["pok"]) if seen["preq"] else "–"}</td>'
+             f'<td class="num">{n0(T["pfail"]) if seen["pfail"] else "–"}</td>'
+             f'<td class="num">{_pct_cell(T["pfail"], T["preq"], seen["preq"])}</td>'
+             f'<td class="muted"></td></tr>')
+    h.append("</table></div>")
+
+    # ---- consumers ----
+    h.append('<h3>Consumers — per topic</h3>')
+    h.append('<div class="tbl-wrap"><table><tr><th>Topic</th>'
+             '<th class="num">MB out</th>'
+             '<th class="num">Fetch requests OK</th><th class="num">Fetch requests FAILED</th>'
+             '<th class="num">Fail %</th><th>Reading</th></tr>')
+    for r in sorted(w.tot_rows, key=lambda q: -(q.get("freq") or 0)):
+        fr, ff, fk = r.get("freq"), r.get("ffail"), r.get("fok")
+        fp = (ff / fr * 100) if (fr and ff is not None and fr > 0) else None
+        if ff:
+            cls, txt = "bad", "fetch requests REJECTED by the brokers"
+        elif fr:
+            cls, txt = "good", "every fetch request served"
+        else:
+            cls, txt = "", "no fetch requests for this topic in the window"
+        fpc = (f'<span class="pill bad">{fp:.2f}%</span>' if (fp and fp > 0)
+               else (f"{fp:.2f}%" if fp is not None else "–"))
+        h.append(f'<tr><td class="mono">{esc(r["topic"])}</td>'
+                 f'<td class="num">{fv(r["bout"] / MB) if r.get("bout") is not None else "–"}</td>'
+                 f'<td class="num">{n0(fk)}</td>'
+                 f'<td class="num">{_fail_cell(ff)}</td>'
+                 f'<td class="num">{fpc}</td><td class="muted {cls}">{txt}</td></tr>')
+    h.append(f'<tr class="tot"><td>TOTAL <span class="muted">({len(w.tot_rows)} topics)</span></td>'
+             f'<td class="num">{fv(T["bout"] / MB) if seen["bout"] else "–"}</td>'
+             f'<td class="num">{n0(T["fok"]) if seen["freq"] else "–"}</td>'
+             f'<td class="num">{n0(T["ffail"]) if seen["ffail"] else "–"}</td>'
+             f'<td class="num">{_pct_cell(T["ffail"], T["freq"], seen["freq"])}</td>'
+             f'<td class="muted"></td></tr>')
+    h.append("</table></div>")
+    h.append('<p class="muted">A <b>fetch request</b> is one consumer poll, which may carry many records '
+             'or none — so the request count measures consumer activity, not messages delivered. For '
+             'messages actually taken by consumers, use the committed-offset table below.</p>')
+
+    # ---- messages consumed, from committed offsets ----
+    if w.cons_rows:
+        h.append('<h3>Messages consumed — per consumer group</h3>')
+        h.append('<p class="muted">Each group\'s committed offset at the end of the window minus the same '
+                 'offset at the start: the number of messages the group actually processed and '
+                 'acknowledged. Lag is what was produced but not yet consumed at the end.</p>')
+        h.append('<div class="tbl-wrap"><table><tr><th>Group</th><th>Topic</th>'
+                 '<th class="num">Messages consumed</th><th class="num">Members</th>'
+                 '<th class="num">Lag at end</th><th>Reading</th></tr>')
+        for r in sorted(w.cons_rows, key=lambda q: -(q["consumed"] or 0)):
+            c, lf = r["consumed"], r["lag_final"]
+            if c is None:
+                cls, txt = "", "committed offset not captured"
+            elif (lf or 0) > 0 and (lf or 0) >= (c or 0) and c == 0:
+                cls, txt = "bad", "consumed nothing while messages were waiting"
+            elif (lf or 0) > 0:
+                cls, txt = "warn", "keeping up, but still behind at the end"
+            elif c:
+                cls, txt = "good", "consumed and fully caught up"
+            else:
+                cls, txt = "", "nothing to consume in the window"
+            h.append(f'<tr><td class="mono">{esc(r["group"])}</td><td class="mono">{esc(r["topic"])}</td>'
+                     f'<td class="num">{n0(c)}</td><td class="num">{n0(r["members"])}</td>'
+                     f'<td class="num">{n0(lf)}</td><td class="muted {cls}">{txt}</td></tr>')
+        h.append(f'<tr class="tot"><td>TOTAL</td>'
+                 f'<td class="muted">{len(w.cons_rows)} group/topic pairs</td>'
+                 f'<td class="num">{n0(cons_tot) if cons_tot is not None else "–"}</td>'
+                 f'<td class="num"></td>'
+                 f'<td class="num">{n0(sum((r["lag_final"] or 0) for r in w.cons_rows))}</td>'
+                 f'<td class="muted"></td></tr>')
+        h.append("</table></div>")
+
+    if w.tot_reset:
+        names = ", ".join(f'<span class="mono">{esc(t)}</span>' for t in w.tot_reset[:5])
+        h.append(f'<div class="verdict warn"><b>Counter reset during the window.</b> {names} had a '
+                 'cumulative counter go backwards, which happens when a broker restarts and its counters '
+                 'return to zero. Totals for those topics are withheld rather than shown as a negative '
+                 'or a wrapped figure.</div>')
+    return "".join(h)
+
+
 def sec_topics(w):
-    h = ['<h2>6 · Topics</h2>']
+    h = ['<h2>7 · Topics — throughput rates</h2>']
     if not w.top:
         return "".join(h) + '<p class="muted">No per-topic rows (the topic label was not present on the metrics).</p>'
     per = {}
@@ -1319,7 +1553,7 @@ def sec_topics(w):
 
 
 def sec_infra(w):
-    h = ['<h2>7 · Pods, placement and storage</h2>']
+    h = ['<h2>8 · Pods, placement and storage</h2>']
     if w.pod:
         per = {}
         for r in w.pod:
@@ -1448,10 +1682,10 @@ def sec_infra(w):
 
 
 def sec_raw(w):
-    h = ['<h2>8 · Raw samples</h2>']
+    h = ['<h2>9 · Raw samples</h2>']
     h.append('<p class="muted">This appendix prints the CSV rows <b>exactly as the collector wrote them</b>, '
              'with no validation applied — that is its purpose, so the capture can be audited against the '
-             'files. Sections 1–7 above apply the checks; where a figure was refused there, the unfiltered '
+             'files. Sections 1–8 above apply the checks; where a figure was refused there, the unfiltered '
              'value still appears here. <b>Quote figures from the sections above, not from this appendix.</b></p>')
     if w.clu:
         h.append(f'<details><summary>cluster — {len(w.clu)} samples</summary><div class="tbl-wrap"><table>'
@@ -1484,7 +1718,8 @@ def sec_raw(w):
     # whose whole purpose is provenance has to be verbatim.
     for name, rows in (("broker", w.brk), ("latency", w.lat), ("topic", w.top),
                        ("JVM", w.jvm), ("pod", w.pod), ("disk", w.dsk),
-                       ("consumer lag", w.lag), ("health (CLI)", w.hlt)):
+                       ("consumer lag", w.lag), ("partition offsets", w.off),
+                       ("health (CLI)", w.hlt)):
         if not rows:
             continue
         cols = [c for c in rows[0].keys() if c not in ("ts_ist", "elapsed_s") and c is not None]
@@ -1528,6 +1763,23 @@ def verdict(w):
         bits.append("<b>Unclean leader elections occurred — data was lost.</b>"); cls = "bad"
     if w.ctl_bad:
         bits.append(f"The controller count left 1 on {len(w.ctl_bad)} sample(s)."); cls = "bad"
+    # Counts before rates: "how many messages, how many failed" is the first
+    # question asked of a load test, and it was previously answerable only by
+    # reading a rate table and multiplying.
+    if getattr(w, "have_totals", False):
+        tm = sum((r["msgs"] or 0) for r in w.tot_rows)
+        pf = sum((r["pfail"] or 0) for r in w.tot_rows)
+        ff = sum((r["ffail"] or 0) for r in w.tot_rows)
+        cons = (sum(r["consumed"] for r in w.cons_rows if r["consumed"] is not None)
+                if getattr(w, "have_consumed", False) else None)
+        part = f"<b>{n0(tm)} messages produced</b>"
+        if cons is not None:
+            part += f", <b>{n0(cons)} consumed</b>"
+        part += (f", with <b>{n0(pf)} producer</b> and <b>{n0(ff)} consumer</b> request failure(s)."
+                 if (pf or ff) else ", and <b>no produce or fetch request failed</b>.")
+        bits.append(part)
+        if pf or ff:
+            cls = "bad"
     if w.pk_in is not None:
         bits.append(f"Peak ingress <b>{fv(w.pk_in)} MB/s</b> ({n0(w.pk_msg)} msg/s), egress "
                     f"{fv(w.pk_out)} MB/s, across {len(w.brokers)} broker(s).")
@@ -1647,7 +1899,8 @@ def build(wins):
     else:
         H.append('<div class="navbtns"><a href="#s1">1 · Health</a><a href="#s2">2 · Window</a>'
                  '<a href="#s3">3 · Brokers</a><a href="#s4">4 · Latency</a><a href="#s5">5 · Lag</a>'
-                 '<a href="#s6">6 · Topics</a><a href="#s7">7 · Pods</a><a href="#s8">8 · Raw</a></div>')
+                 '<a href="#s6">6 · Totals</a><a href="#s7">7 · Topics</a>'
+                 '<a href="#s8">8 · Pods</a><a href="#s9">9 · Raw</a></div>')
     # Sections are rendered first so every rejection is already counted, then
     # the data-quality banner is placed above them — the reader must see what was
     # refused before they read any figure.
@@ -1660,7 +1913,8 @@ def build(wins):
         pre = "" if multi else '<span id="s%d"></span>'
         secs = []
         for i, sb in enumerate((sec_health(w), sec_window(w), sec_brokers(w), sec_latency(w),
-                                sec_lag(w), sec_topics(w), sec_infra(w), sec_raw(w)), start=1):
+                                sec_lag(w), sec_totals(w), sec_topics(w), sec_infra(w),
+                                sec_raw(w)), start=1):
             secs.append((pre % i if pre else "") + sb)
         vc, vt = verdict(w)
         body.append(f'<div class="verdict {vc}"><b>Summary.</b> {vt}</div>')

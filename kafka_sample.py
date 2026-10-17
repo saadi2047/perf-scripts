@@ -144,6 +144,18 @@ t_in, t_out, t_msg = rd("t_in"), rd("t_out"), rd("t_msg")
 # absent rather than a misleading zero.
 t_ptot, t_pfail = rd("t_ptot"), rd("t_pfail")
 t_ftot, t_ffail = rd("t_ftot"), rd("t_ffail")
+# cumulative counters — the report differences these to get exact totals
+c_msg, c_ptot, c_pfail = rd("c_msg"), rd("c_ptot"), rd("c_pfail")
+c_ftot, c_ffail = rd("c_ftot"), rd("c_ffail")
+c_bin, c_bout = rd("c_bin"), rd("c_bout")
+
+
+def _cum(d, topic, have):
+    """cumulative counter cell: blank when the series does not exist, so a
+    missing metric can never be mistaken for a genuine zero count"""
+    if not have or topic not in d:
+        return ""
+    return f"{d[topic]:.0f}"
 
 
 def ok_fail(topic, tot, fail, have_tot, have_fail):
@@ -388,7 +400,14 @@ if t_in:
                                 "" if _po is None else f"{_po:.2f}",
                                 "" if _pf is None else f"{_pf:.2f}",
                                 "" if _fo is None else f"{_fo:.2f}",
-                                "" if _ff is None else f"{_ff:.2f}"])
+                                "" if _ff is None else f"{_ff:.2f}",
+                                _cum(c_msg, t, "ptot" in HAVE or "bytesin" in HAVE),
+                                _cum(c_ptot, t, "ptot" in HAVE),
+                                _cum(c_pfail, t, "pfail" in HAVE),
+                                _cum(c_ftot, t, "ftot" in HAVE),
+                                _cum(c_ffail, t, "ffail" in HAVE),
+                                _cum(c_bin, t, "bytesin" in HAVE),
+                                _cum(c_bout, t, "bytesin" in HAVE)])
 
 # ---- 5. pods / JVM / disk ---------------------------------------------------
 A("")

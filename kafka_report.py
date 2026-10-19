@@ -1768,18 +1768,37 @@ def verdict(w):
     # reading a rate table and multiplying.
     if getattr(w, "have_totals", False):
         tm = sum((r["msgs"] or 0) for r in w.tot_rows)
-        pf = sum((r["pfail"] or 0) for r in w.tot_rows)
-        ff = sum((r["ffail"] or 0) for r in w.tot_rows)
+        # A failure count the exporter never published is NOT a measured zero,
+        # and "no request failed" is the one claim in this report that must
+        # never be guessed. Three states, kept apart:
+        #   some topic reported a number -> sum the numbers that exist
+        #   every topic reported None    -> say so, and why
+        #   mixed                        -> sum, and declare the coverage
+        pf_v = [r["pfail"] for r in w.tot_rows if r["pfail"] is not None]
+        ff_v = [r["ffail"] for r in w.tot_rows if r["ffail"] is not None]
+        pf, ff = sum(pf_v), sum(ff_v)
+        n_rows = len(w.tot_rows)
+        part = f"<b>{n0(tm)} messages produced</b>"
         cons = (sum(r["consumed"] for r in w.cons_rows if r["consumed"] is not None)
                 if getattr(w, "have_consumed", False) else None)
-        part = f"<b>{n0(tm)} messages produced</b>"
         if cons is not None:
             part += f", <b>{n0(cons)} consumed</b>"
-        part += (f", with <b>{n0(pf)} producer</b> and <b>{n0(ff)} consumer</b> request failure(s)."
-                 if (pf or ff) else ", and <b>no produce or fetch request failed</b>.")
-        bits.append(part)
         if pf or ff:
+            part += (f", with <b>{n0(pf)} producer</b> and <b>{n0(ff)} consumer</b> "
+                     "request failure(s).")
             cls = "bad"
+        elif not pf_v and not ff_v:
+            part += (". <b>Request failure counts were not published</b> for any topic, so "
+                     "this run cannot confirm whether any produce or fetch request failed — "
+                     "the broker exposes failedProduceRequests / failedFetchRequests only as "
+                     "an all-topics aggregate here, not per topic.")
+        elif len(pf_v) < n_rows or len(ff_v) < n_rows:
+            part += (f". No failures on the topics that reported counts, but only "
+                     f"{len(pf_v)}/{n_rows} topics published a producer failure count and "
+                     f"{len(ff_v)}/{n_rows} a consumer one — the rest are unknown, not zero.")
+        else:
+            part += ", and <b>no produce or fetch request failed</b>."
+        bits.append(part)
     if w.pk_in is not None:
         bits.append(f"Peak ingress <b>{fv(w.pk_in)} MB/s</b> ({n0(w.pk_msg)} msg/s), egress "
                     f"{fv(w.pk_out)} MB/s, across {len(w.brokers)} broker(s).")

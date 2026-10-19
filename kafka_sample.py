@@ -167,6 +167,24 @@ def ok_fail(topic, tot, fail, have_tot, have_fail):
     return (o if o > 0 else 0.0, f)
 l_tot, l_q, l_l = coherent_latency(rd2("l_tot"), rd2("l_q"), rd2("l_l"))
 l_r = rd("l_r")
+# A metric the exporter never published is NOT a measured zero. When the
+# request-rate series is absent entirely, every req/s cell must read blank
+# (console: a dash), so nobody reads "0" as "we measured no requests".
+# Same rule as _cum(): absent is blank, zero is 0.
+REQRATE_PUBLISHED = bool(l_r)
+
+
+def rate_cell(rq, width=None):
+    """req/s for the console: a dash when the series was never published."""
+    if not REQRATE_PUBLISHED:
+        return f"{'—':>{width}}" if width else "—"
+    v = l_r.get(rq, 0)
+    return f"{v:{width}.0f}" if width else f"{v:.0f}"
+
+
+def rate_csv(rq):
+    """req/s for the CSV: empty string when the series was never published."""
+    return "" if not REQRATE_PUBLISHED else f"{l_r.get(rq, 0):.1f}"
 pvcu, pvcc = rd("pvcu"), rd("pvcc")
 
 brokers = [b for b in E("BROKERS", "").split() if b]
@@ -357,10 +375,10 @@ if l_tot:
     A(f"  {'REQUEST':<24}{'total ms':>10}{'queue ms':>10}{'local ms':>10}{'req/s':>10}")
     for rq in sorted(l_tot, key=lambda k: -l_tot[k])[:8]:
         A(f"  {squeeze(rq,23):<24}{l_tot.get(rq,0):10.1f}{l_q.get(rq,0):10.1f}"
-          f"{l_l.get(rq,0):10.1f}{l_r.get(rq,0):10.0f}")
+          f"{l_l.get(rq,0):10.1f}{rate_cell(rq,10)}")
         csv_append(E("C_LAT"), [TS, EL, rq, f"{l_tot.get(rq,0):.2f}",
                                 f"{l_q.get(rq,0):.2f}", f"{l_l.get(rq,0):.2f}",
-                                f"{l_r.get(rq,0):.1f}"])
+                                rate_csv(rq)])
     if _lk == "max":
         A("      NOTE: these are Max-since-start, not percentiles — your exporter")
         A("      publishes no quantile labels. A Max of tens of seconds is normal")
@@ -379,6 +397,13 @@ if l_tot:
         if hot:
             A(f"      {', '.join(sorted(hot)[:3])}: queue time dominates while local time stays")
             A("      flat = brokers are backed up, not slow — add partitions/brokers.")
+        elif not REQRATE_PUBLISHED:
+            A("      NOTE: req/s is blank because your JMX exporter does not publish")
+            A("      kafka.network:type=RequestMetrics,name=RequestsPerSec. Without a")
+            A("      rate these p99s cannot be separated from background chatter")
+            A("      (Cruise Control, the operator, KRaft quorum), so treat none of")
+            A("      them as load-test latency. Add a RequestsPerSec rule to the")
+            A("      kafka-metrics ConfigMap to make this section meaningful.")
         elif not any(l_r.get(r, 0) > 0 for r in l_tot):
             A("      NOTE: no request type had a measurable rate — every row above is")
             A("      background chatter (Cruise Control, the operator, KRaft quorum).")

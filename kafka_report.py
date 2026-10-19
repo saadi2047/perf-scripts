@@ -720,6 +720,55 @@ class Win:
                 "members": F(rs[-1].get("members"))})
         self.have_consumed = any(r["consumed"] is not None for r in self.cons_rows)
 
+        # ---- produced vs consumed, joined on topic ----------------------
+        # One row per topic with both sides side by side, which is the question
+        # actually asked of a load test: did what went in come out again?
+        # Both figures come from the broker's own offsets over the SAME deep-CLI
+        # sub-window, so they are comparable to each other. Produced uses end
+        # offsets; consumed uses committed offsets summed over every group on
+        # that topic, so a topic read by two groups can legitimately exceed its
+        # produced count -- that is two consumption events, not an error.
+        _p_by_topic, _p_span = {}, {}
+        if self.off:
+            tmp = {}
+            for r in self.off:
+                t, e, v = r.get("topic", ""), F(r.get("elapsed_s")), F(r.get("end_offset"))
+                if t and e is not None and v is not None:
+                    tmp.setdefault(t, {}).setdefault(e, 0.0)
+                    tmp[t][e] += v
+            for t, byel in tmp.items():
+                els = sorted(byel)
+                if len(els) < 2:
+                    continue
+                d = byel[els[-1]] - byel[els[0]]
+                if d >= 0:                      # negative = retention or recreate
+                    _p_by_topic[t] = d
+                    _p_span[t] = els[-1] - els[0]
+        _c_by_topic, _c_groups = {}, {}
+        for r in self.cons_rows:
+            if r["consumed"] is None:
+                continue
+            t = r["topic"]
+            _c_by_topic[t] = _c_by_topic.get(t, 0.0) + r["consumed"]
+            _c_groups.setdefault(t, []).append(r["group"])
+        self.pc_rows = []
+        for t in sorted(set(_p_by_topic) | set(_c_by_topic)):
+            prod = _p_by_topic.get(t)
+            cons = _c_by_topic.get(t)
+            span = _p_span.get(t)
+            self.pc_rows.append({
+                "topic": t,
+                "produced": prod,
+                "consumed": cons,
+                "groups": sorted(set(_c_groups.get(t, []))),
+                "prod_s": (prod / span) if (prod is not None and span) else None,
+                "cons_s": (cons / span) if (cons is not None and span) else None,
+                # unconsumed is only meaningful when exactly one group reads the
+                # topic; with several, consumed counts each group separately.
+                "gap": (prod - cons) if (prod is not None and cons is not None
+                                         and len(set(_c_groups.get(t, []))) == 1) else None})
+        self.have_pc = bool(self.pc_rows)
+
         # ---- independent verification of the message rate ----
         # A JMX rate is derived; a partition end offset is a count the broker
         # maintains itself. Differencing the offsets gives messages-produced
@@ -1357,6 +1406,52 @@ def sec_totals(w):
              f'<td class="num">{_pct_cell(T["pfail"], T["preq"], seen["preq"])}</td>'
              f'<td class="muted"></td></tr>')
     h.append("</table></div>")
+
+    # ---- produced vs consumed, side by side -------------------------------
+    if w.have_pc:
+        h.append('<h3>Produced vs consumed — per topic</h3>')
+        h.append('<p class="muted">Both columns are the <b>broker\'s own offsets</b> over the same '
+                 'deep-sample sub-window, so they are directly comparable. Produced = end-offset '
+                 'delta. Consumed = committed-offset delta, summed over every consumer group on '
+                 'that topic — so a topic read by two groups can legitimately show more consumed '
+                 'than produced, because that is two consumption events. '
+                 '<b>Unconsumed</b> is therefore only shown where exactly one group reads the '
+                 'topic. A blank is "not measured", never zero.</p>')
+        h.append('<div class="tbl-wrap"><table><tr><th>Topic</th>'
+                 '<th class="num">Produced</th><th class="num">Consumed</th>'
+                 '<th class="num">Unconsumed</th>'
+                 '<th class="num">Prod msg/s</th><th class="num">Cons msg/s</th>'
+                 '<th>Groups</th><th>Reading</th></tr>')
+        TP = TC = 0.0
+        for r in sorted(w.pc_rows, key=lambda q: -(q["produced"] or 0)):
+            prod, cons, gap = r["produced"], r["consumed"], r["gap"]
+            if prod is not None:
+                TP += prod
+            if cons is not None:
+                TC += cons
+            if prod is None:
+                cls, txt = "muted", "no offset samples for this topic"
+            elif cons is None:
+                cls, txt = "muted", "produced, but no consumer group committed an offset"
+            elif gap is not None and gap > 0 and prod > 0 and gap / prod > 0.01:
+                cls, txt = "warn", f"{fv(gap / prod * 100)}% of what was produced was not consumed"
+            elif gap is not None and gap <= 0:
+                cls, txt = "ok", "consumers kept up with producers"
+            else:
+                cls, txt = "ok", "produced and consumed within 1%"
+            h.append(f'<tr><td class="mono">{esc(r["topic"])}</td>'
+                     f'<td class="num">{n0(prod) if prod is not None else "–"}</td>'
+                     f'<td class="num">{n0(cons) if cons is not None else "–"}</td>'
+                     f'<td class="num">{n0(gap) if gap is not None else "–"}</td>'
+                     f'<td class="num">{fv(r["prod_s"]) if r["prod_s"] is not None else "–"}</td>'
+                     f'<td class="num">{fv(r["cons_s"]) if r["cons_s"] is not None else "–"}</td>'
+                     f'<td class="muted">{esc(", ".join(r["groups"])) or "–"}</td>'
+                     f'<td class="muted {cls}">{txt}</td></tr>')
+        h.append(f'<tr class="tot"><td>TOTAL <span class="muted">({len(w.pc_rows)} topics)</span></td>'
+                 f'<td class="num">{n0(TP)}</td><td class="num">{n0(TC)}</td>'
+                 f'<td class="num">–</td><td class="num">–</td><td class="num">–</td>'
+                 f'<td class="muted"></td><td class="muted"></td></tr>')
+        h.append("</table></div>")
 
     # ---- consumers ----
     h.append('<h3>Consumers — per topic</h3>')

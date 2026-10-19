@@ -139,6 +139,58 @@ flag = rd("fetchlag")
 shrink, expand = rd("isrshrink"), rd("isrexpand")
 heap, gcc, gct = rd("heap"), rd("gcc"), rd("gct")
 t_in, t_out, t_msg = rd("t_in"), rd("t_out"), rd("t_msg")
+
+
+def _deep_rate(path, topic_col, value_col):
+    """Per-topic per-second rate from the last two deep samples of a CSV.
+
+    The broker's own offsets, not a JMX rate: produced comes from end offsets
+    (kafka-get-offsets) and consumed from consumer-group CURRENT-OFFSET. These
+    are counts the broker maintains, so they verify the JMX numbers rather than
+    repeating them. Returns ({}, None) until two deep samples exist, so the
+    first cycle shows a dash instead of a fabricated zero.
+    """
+    import csv as _csv
+    if not path:
+        return {}, None
+    try:
+        with open(path) as fh:
+            rows = list(_csv.DictReader(fh))
+    except Exception:
+        return {}, None
+    by_el = {}
+    for r in rows:
+        t = (r.get(topic_col) or "").strip()
+        if not t or t == topic_col:
+            continue
+        try:
+            el = float(r.get("elapsed_s") or "")
+            v = float(r.get(value_col) or "")
+        except (TypeError, ValueError):
+            continue
+        by_el.setdefault(el, {})
+        by_el[el][t] = by_el[el].get(t, 0.0) + v
+    els = sorted(by_el)
+    if len(els) < 2:
+        return {}, None
+    e0, e1 = els[-2], els[-1]
+    dt = e1 - e0
+    if dt <= 0:
+        return {}, None
+    out = {}
+    for t in set(by_el[e1]) | set(by_el[e0]):
+        d = by_el[e1].get(t, 0.0) - by_el[e0].get(t, 0.0)
+        if d >= 0:                      # a negative delta means the topic was
+            out[t] = d / dt             # recreated; withhold rather than guess
+    return out, dt
+
+
+# produced/s from end offsets; consumed/s from committed offsets, summed over
+# every group reading that topic (a message read by two groups counts twice --
+# that is two consumption events, which is what "consumed" means here).
+prod_s, _prod_dt = _deep_rate(E("C_OFF"), "topic", "end_offset")
+cons_s, _cons_dt = _deep_rate(E("C_LAG"), "topic", "current_offset")
+OFFSETS_READY = bool(prod_s) or bool(cons_s)
 # Per-topic request outcomes. The broker publishes TOTAL and FAILED separately,
 # so success is the difference — never negative, and blank when the series is
 # absent rather than a misleading zero.
@@ -367,6 +419,16 @@ if tot_lead and len(brokers) > 1:
           f"({'even' if max(lv)/min(lv) < 1.3 else 'UNEVEN — one broker is doing more work'})")
 
 # ---- 3. latency -------------------------------------------------------------
+if not l_tot:
+    # This section used to vanish when the latency series returned nothing,
+    # so the display jumped 2 -> 4 and looked like a missing section. State
+    # the reason instead of disappearing.
+    A("")
+    A("  [3] REQUEST LATENCY")
+    A("  ----------------------------------------------------------------------------------")
+    A("      No latency data in this sample. Either the exporter publishes no")
+    A("      kafka_network_requestmetrics_totaltimems series, or Thanos returned")
+    A("      none for this instant. Check with: ./perf-kafka.sh --metrics totaltime")
 if l_tot:
     A("")
     _lk = E("LAT_KIND", "p99")
@@ -412,15 +474,30 @@ if l_tot:
 # ---- 4. topics --------------------------------------------------------------
 if t_in:
     A("")
-    A("  [4] TOP TOPICS BY INGRESS")
+    A("  [4] TOPICS — PRODUCED vs CONSUMED")
     A("  ----------------------------------------------------------------------------------")
-    A(f"  {'TOPIC':<42}{'MB/s in':>10}{'MB/s out':>10}{'msg/s':>10}")
-    for t in sorted(t_in, key=lambda k: -t_in[k])[:10]:
-        A(f"  {squeeze(t,41):<42}{t_in[t]/MB:10.3f}{t_out.get(t,0)/MB:10.3f}{t_msg.get(t,0):10.0f}")
-    for t in t_in:
+    A(f"  {'TOPIC':<38}{'MB/s in':>9}{'MB/s out':>9}{'JMX msg/s':>10}"
+      f"{'PROD/s':>9}{'CONS/s':>9}")
+    _order = sorted(set(t_in) | set(prod_s) | set(cons_s),
+                    key=lambda k: -(prod_s.get(k, 0) or t_in.get(k, 0) / MB))
+    for t in _order[:12]:
+        _p = f"{prod_s[t]:9.1f}" if t in prod_s else f"{'—':>9}"
+        _c = f"{cons_s[t]:9.1f}" if t in cons_s else f"{'—':>9}"
+        A(f"  {squeeze(t,37):<38}{t_in.get(t,0)/MB:9.3f}{t_out.get(t,0)/MB:9.3f}"
+          f"{t_msg.get(t,0):10.0f}{_p}{_c}")
+    if not OFFSETS_READY:
+        A("      PROD/s and CONS/s need two offset samples — they appear from the")
+        A("      second deep cycle onward. A dash means not yet measured, never zero.")
+    else:
+        A("      PROD/s = broker end offsets (its own count). CONS/s = committed")
+        A("      offsets, summed over every group on that topic. JMX msg/s is the")
+        A("      exporter's rate -- where it disagrees with PROD/s, trust PROD/s.")
+    # union, not just t_in: a topic the exporter has no series for still has
+    # real end offsets, and dropping its row would hide produced traffic.
+    for t in sorted(set(t_in) | set(prod_s) | set(cons_s)):
         _po, _pf = ok_fail(t, t_ptot, t_pfail, "ptot" in HAVE, "pfail" in HAVE)
         _fo, _ff = ok_fail(t, t_ftot, t_ffail, "ftot" in HAVE, "ffail" in HAVE)
-        csv_append(E("C_TOP"), [TS, EL, t, f"{t_in[t]/MB:.4f}",
+        csv_append(E("C_TOP"), [TS, EL, t, f"{t_in.get(t,0)/MB:.4f}",
                                 f"{t_out.get(t,0)/MB:.4f}", f"{t_msg.get(t,0):.1f}",
                                 "" if _po is None else f"{_po:.2f}",
                                 "" if _pf is None else f"{_pf:.2f}",
@@ -432,7 +509,10 @@ if t_in:
                                 _cum(c_ftot, t, "ftot" in HAVE),
                                 _cum(c_ffail, t, "ffail" in HAVE),
                                 _cum(c_bin, t, "bytesin" in HAVE),
-                                _cum(c_bout, t, "bytesin" in HAVE)])
+                                _cum(c_bout, t, "bytesin" in HAVE),
+                                # blank, never 0, until two offset samples exist
+                                "" if t not in prod_s else f"{prod_s[t]:.2f}",
+                                "" if t not in cons_s else f"{cons_s[t]:.2f}"])
 
 # ---- 5. pods / JVM / disk ---------------------------------------------------
 A("")

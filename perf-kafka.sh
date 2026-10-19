@@ -737,7 +737,7 @@ C_OFF="$OUTDIR/kafka_offsets_${TAG}.csv"
 
 echo "ts_ist,elapsed_s,active_controllers,offline_partitions,under_replicated,unclean_elections,partitions_total,leaders_total,bytes_in_mb_s,bytes_out_mb_s,messages_in_s" > "$C_CLU"
 echo "ts_ist,elapsed_s,pod,bytes_in_mb_s,bytes_out_mb_s,messages_in_s,handler_idle_pct,network_idle_pct,request_queue,response_queue,purgatory,under_replicated,partitions,leaders,isr_shrink_s,isr_expand_s,follower_lag,at_min_isr,purgatory_produce" > "$C_BRK"
-echo "ts_ist,elapsed_s,topic,bytes_in_mb_s,bytes_out_mb_s,messages_in_s,produce_ok_s,produce_fail_s,fetch_ok_s,fetch_fail_s,messages_cum,produce_req_cum,produce_fail_cum,fetch_req_cum,fetch_fail_cum,bytes_in_cum,bytes_out_cum" > "$C_TOP"
+echo "ts_ist,elapsed_s,topic,bytes_in_mb_s,bytes_out_mb_s,messages_in_s,produce_ok_s,produce_fail_s,fetch_ok_s,fetch_fail_s,messages_cum,produce_req_cum,produce_fail_cum,fetch_req_cum,fetch_fail_cum,bytes_in_cum,bytes_out_cum,produced_s,consumed_s" > "$C_TOP"
 echo "ts_ist,elapsed_s,request,total_ms,queue_ms,local_ms,req_per_s" > "$C_LAT"
 echo "ts_ist,elapsed_s,pod,heap_used_mb,gc_count_s,gc_time_ms_s" > "$C_JVM"
 echo "ts_ist,elapsed_s,pod,role,node,phase,ready,restarts,cpu_m,mem_mi" > "$C_POD"
@@ -1036,6 +1036,7 @@ while :; do
         ACTCTL="$ACTCTL" OFFP="$OFFP" UNCL="$UNCL" \
         C_CLU="$C_CLU" C_BRK="$C_BRK" C_TOP="$C_TOP" C_LAT="$C_LAT" \
         C_JVM="$C_JVM" C_POD="$C_POD" C_DSK="$C_DSK" \
+        C_LAG="$C_LAG" C_OFF="$C_OFF" \
         python3 -I "$(dirname "$0")/kafka_sample.py" 2>/dev/null)
   [ -z "$OUT" ] && OUT="  (renderer produced no output — is kafka_sample.py beside perf-kafka.sh?)"
 

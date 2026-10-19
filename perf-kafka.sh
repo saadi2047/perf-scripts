@@ -737,7 +737,7 @@ C_OFF="$OUTDIR/kafka_offsets_${TAG}.csv"
 
 echo "ts_ist,elapsed_s,active_controllers,offline_partitions,under_replicated,unclean_elections,partitions_total,leaders_total,bytes_in_mb_s,bytes_out_mb_s,messages_in_s" > "$C_CLU"
 echo "ts_ist,elapsed_s,pod,bytes_in_mb_s,bytes_out_mb_s,messages_in_s,handler_idle_pct,network_idle_pct,request_queue,response_queue,purgatory,under_replicated,partitions,leaders,isr_shrink_s,isr_expand_s,follower_lag,at_min_isr,purgatory_produce" > "$C_BRK"
-echo "ts_ist,elapsed_s,topic,bytes_in_mb_s,bytes_out_mb_s,messages_in_s,produce_ok_s,produce_fail_s,fetch_ok_s,fetch_fail_s,messages_cum,produce_req_cum,produce_fail_cum,fetch_req_cum,fetch_fail_cum,bytes_in_cum,bytes_out_cum" > "$C_TOP"
+echo "ts_ist,elapsed_s,topic,bytes_in_mb_s,bytes_out_mb_s,messages_in_s,produce_ok_s,produce_fail_s,fetch_ok_s,fetch_fail_s,messages_cum,produce_req_cum,produce_fail_cum,fetch_req_cum,fetch_fail_cum,bytes_in_cum,bytes_out_cum,produced_s,consumed_s" > "$C_TOP"
 echo "ts_ist,elapsed_s,request,total_ms,queue_ms,local_ms,req_per_s" > "$C_LAT"
 echo "ts_ist,elapsed_s,pod,heap_used_mb,gc_count_s,gc_time_ms_s" > "$C_JVM"
 echo "ts_ist,elapsed_s,pod,role,node,phase,ready,restarts,cpu_m,mem_mi" > "$C_POD"
@@ -1036,8 +1036,21 @@ while :; do
         ACTCTL="$ACTCTL" OFFP="$OFFP" UNCL="$UNCL" \
         C_CLU="$C_CLU" C_BRK="$C_BRK" C_TOP="$C_TOP" C_LAT="$C_LAT" \
         C_JVM="$C_JVM" C_POD="$C_POD" C_DSK="$C_DSK" \
-        python3 -I "$(dirname "$0")/kafka_sample.py" 2>/dev/null)
-  [ -z "$OUT" ] && OUT="  (renderer produced no output — is kafka_sample.py beside perf-kafka.sh?)"
+        python3 -I "$(dirname "$0")/kafka_sample.py" 2>"$TMP/render_err")
+  # Throwing the renderer's stderr away turned a one-line Python error into an
+  # hour of guesswork. Show it, and keep a copy beside the CSVs.
+  if [ -z "$OUT" ]; then
+    OUT="  (renderer produced no output — python3 $(python3 -V 2>&1 | awk '{print $2}'))"
+    if [ -s "$TMP/render_err" ]; then
+      cp "$TMP/render_err" "$OUTDIR/renderer_error.txt" 2>/dev/null || :
+      OUT="$OUT
+$(sed -n '1,14p' "$TMP/render_err" | sed 's/^/      /')
+      (full text: $OUTDIR/renderer_error.txt)"
+    else
+      OUT="$OUT
+      No error text either — is kafka_sample.py beside perf-kafka.sh?"
+    fi
+  fi
 
   # keep running peaks for the closing summary (the renderer reports this sample
   # only; the shell is what remembers the window)
@@ -1092,6 +1105,32 @@ while :; do
         END { for (k in seen) { split(k,a,SUBSEP); printf "%s,%s,%s,%s,%d\n", ts, el, a[1], a[2], seen[k] } }
       ' "$TMP/cg" >> "$C_OFF"
     fi
+    # ---------- produced/s and consumed/s, from the broker's own offsets ------
+    # Computed here in awk rather than inside the renderer: a dump file that
+    # fails to appear costs a dash on screen, where an exception inside
+    # kafka_sample.py costs the entire display. Same channel every other
+    # metric uses. Emits nothing until two deep samples exist, so the first
+    # cycle shows a dash and never a fabricated zero.
+    #   C_OFF: ts,elapsed_s,topic,partition,end_offset       -> $3 topic $5 value
+    #   C_LAG: ts,elapsed_s,group,topic,...,current_offset   -> $4 topic $8 value
+    _RATE_AWK='
+      BEGIN{FS=","}
+      NR==1{next}
+      $2 ~ /^[0-9.]+$/ && $(VC) ~ /^[0-9]+$/ {
+        e=$2+0; t=$(TC); if (t=="" || t=="topic") next
+        s[t SUBSEP e]+=$(VC); els[e]=1; tops[t]=1 }
+      END{
+        m1=-1; m2=-1
+        for (e in els) { v=e+0
+          if (v>m1) { m2=m1; m1=v } else if (v>m2) { m2=v } }
+        if (m2<0) exit
+        dt=m1-m2; if (dt<=0) exit
+        for (t in tops) { a=s[t SUBSEP m1]; b=s[t SUBSEP m2]
+          if (a=="" || b=="") continue
+          d=a-b; if (d>=0) printf "%s\t%.4f\n", t, d/dt } }'
+    awk -v TC=3 -v VC=5 "$_RATE_AWK" "$C_OFF" > "$TMP/prod_s" 2>/dev/null || : > "$TMP/prod_s"
+    awk -v TC=4 -v VC=8 "$_RATE_AWK" "$C_LAG" > "$TMP/cons_s" 2>/dev/null || : > "$TMP/cons_s"
+
     TOTLAG=$(awk -F, -v t="$TS" '$1==t{s+=$5} END{print s+0}' "$C_LAG")
     awk -v m="$MAX_LAG" -v n="$TOTLAG" 'BEGIN{exit !(n>m)}' && MAX_LAG="$TOTLAG"
     LAGLINE="   consumer lag (all groups): $TOTLAG"

@@ -139,6 +139,11 @@ flag = rd("fetchlag")
 shrink, expand = rd("isrshrink"), rd("isrexpand")
 heap, gcc, gct = rd("heap"), rd("gcc"), rd("gct")
 t_in, t_out, t_msg = rd("t_in"), rd("t_out"), rd("t_msg")
+# Produced/consumed come from the broker's own offsets, computed in awk by
+# perf-kafka.sh and handed over as ordinary dump files. Nothing here can throw:
+# a missing or empty dump just means rd() returns {} and the columns show a
+# dash. Both are empty until two deep samples exist.
+prod_s, cons_s = rd("prod_s"), rd("cons_s")
 # Per-topic request outcomes. The broker publishes TOTAL and FAILED separately,
 # so success is the difference — never negative, and blank when the series is
 # absent rather than a misleading zero.
@@ -367,6 +372,16 @@ if tot_lead and len(brokers) > 1:
           f"({'even' if max(lv)/min(lv) < 1.3 else 'UNEVEN — one broker is doing more work'})")
 
 # ---- 3. latency -------------------------------------------------------------
+if not l_tot:
+    # Guarded by `if l_tot:` this section disappeared whenever the latency
+    # series came back empty, so the display jumped 2 -> 4 and looked like a
+    # missing section. State the reason instead of vanishing.
+    A("")
+    A("  [3] REQUEST LATENCY")
+    A("  ----------------------------------------------------------------------------------")
+    A("      No latency data in this sample. Either the exporter publishes no")
+    A("      kafka_network_requestmetrics_totaltimems series, or Thanos returned")
+    A("      none for this instant. Check: ./perf-kafka.sh --metrics totaltime")
 if l_tot:
     A("")
     _lk = E("LAT_KIND", "p99")
@@ -412,15 +427,29 @@ if l_tot:
 # ---- 4. topics --------------------------------------------------------------
 if t_in:
     A("")
-    A("  [4] TOP TOPICS BY INGRESS")
+    A("  [4] TOPICS — PRODUCED vs CONSUMED")
     A("  ----------------------------------------------------------------------------------")
-    A(f"  {'TOPIC':<42}{'MB/s in':>10}{'MB/s out':>10}{'msg/s':>10}")
-    for t in sorted(t_in, key=lambda k: -t_in[k])[:10]:
-        A(f"  {squeeze(t,41):<42}{t_in[t]/MB:10.3f}{t_out.get(t,0)/MB:10.3f}{t_msg.get(t,0):10.0f}")
-    for t in t_in:
+    A(f"  {'TOPIC':<38}{'MB/s in':>9}{'MB/s out':>9}{'JMX m/s':>9}"
+      f"{'PROD/s':>9}{'CONS/s':>9}")
+    _keys = sorted(set(t_in) | set(prod_s) | set(cons_s),
+                   key=lambda k: -max(prod_s.get(k, 0.0), t_msg.get(k, 0.0)))
+    for t in _keys[:12]:
+        _p = f"{prod_s[t]:9.1f}" if t in prod_s else f"{'—':>9}"
+        _c = f"{cons_s[t]:9.1f}" if t in cons_s else f"{'—':>9}"
+        A(f"  {squeeze(t,37):<38}{t_in.get(t,0)/MB:9.3f}{t_out.get(t,0)/MB:9.3f}"
+          f"{t_msg.get(t,0):9.0f}{_p}{_c}")
+    if prod_s or cons_s:
+        A("      PROD/s = broker end offsets, CONS/s = committed offsets summed over")
+        A("      every group on that topic. Both are counts the broker keeps itself,")
+        A("      measured over the last deep-CLI interval. Where JMX m/s disagrees")
+        A("      with PROD/s, PROD/s is the one to trust. A dash is not-measured.")
+    else:
+        A("      PROD/s and CONS/s appear from the second deep cycle, once there are")
+        A("      two offset samples to difference. A dash means not yet measured.")
+    for t in sorted(set(t_in) | set(prod_s) | set(cons_s)):
         _po, _pf = ok_fail(t, t_ptot, t_pfail, "ptot" in HAVE, "pfail" in HAVE)
         _fo, _ff = ok_fail(t, t_ftot, t_ffail, "ftot" in HAVE, "ffail" in HAVE)
-        csv_append(E("C_TOP"), [TS, EL, t, f"{t_in[t]/MB:.4f}",
+        csv_append(E("C_TOP"), [TS, EL, t, f"{t_in.get(t,0)/MB:.4f}",
                                 f"{t_out.get(t,0)/MB:.4f}", f"{t_msg.get(t,0):.1f}",
                                 "" if _po is None else f"{_po:.2f}",
                                 "" if _pf is None else f"{_pf:.2f}",
@@ -432,7 +461,10 @@ if t_in:
                                 _cum(c_ftot, t, "ftot" in HAVE),
                                 _cum(c_ffail, t, "ffail" in HAVE),
                                 _cum(c_bin, t, "bytesin" in HAVE),
-                                _cum(c_bout, t, "bytesin" in HAVE)])
+                                _cum(c_bout, t, "bytesin" in HAVE),
+                                # blank, never 0, until two offset samples exist
+                                "" if t not in prod_s else f"{prod_s[t]:.2f}",
+                                "" if t not in cons_s else f"{cons_s[t]:.2f}"])
 
 # ---- 5. pods / JVM / disk ---------------------------------------------------
 A("")

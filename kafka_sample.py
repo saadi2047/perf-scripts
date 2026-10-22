@@ -429,7 +429,7 @@ if t_in:
     A("")
     A("  [4] TOPICS — PRODUCED vs CONSUMED")
     A("  ----------------------------------------------------------------------------------")
-    A(f"  {'TOPIC':<38}{'MB/s in':>9}{'MB/s out':>9}{'JMX m/s':>9}"
+    A(f"  {'TOPIC':<38}{'MB/s in':>9}{'MB/s out':>9}{'~jmx m/s':>9}"
       f"{'PROD/s':>9}{'CONS/s':>9}")
     _keys = sorted(set(t_in) | set(prod_s) | set(cons_s),
                    key=lambda k: -max(prod_s.get(k, 0.0), t_msg.get(k, 0.0)))
@@ -439,13 +439,13 @@ if t_in:
         A(f"  {squeeze(t,37):<38}{t_in.get(t,0)/MB:9.3f}{t_out.get(t,0)/MB:9.3f}"
           f"{t_msg.get(t,0):9.0f}{_p}{_c}")
     if prod_s or cons_s:
-        A("      PROD/s = broker end offsets, CONS/s = committed offsets summed over")
-        A("      every group on that topic. Both are counts the broker keeps itself,")
-        A("      measured over the last deep-CLI interval. Where JMX m/s disagrees")
-        A("      with PROD/s, PROD/s is the one to trust. A dash is not-measured.")
+        A("      PROD/s and CONS/s are EXACT: differenced from the broker's own end")
+        A("      offsets and committed offsets. PROD/s updates every cycle, CONS/s")
+        A("      on the deep cycle. ~jmx m/s is a SMOOTHED ESTIMATE from rate() and")
+        A("      runs up to 10% off over a window -- use it only as a cross-check.")
     else:
-        A("      PROD/s and CONS/s appear from the second deep cycle, once there are")
-        A("      two offset samples to difference. A dash means not yet measured.")
+        A("      PROD/s and CONS/s appear from the second cycle, once there are two")
+        A("      offset samples to difference. A dash means not yet measured.")
     for t in sorted(set(t_in) | set(prod_s) | set(cons_s)):
         _po, _pf = ok_fail(t, t_ptot, t_pfail, "ptot" in HAVE, "pfail" in HAVE)
         _fo, _ff = ok_fail(t, t_ftot, t_ffail, "ftot" in HAVE, "ffail" in HAVE)

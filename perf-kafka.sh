@@ -56,6 +56,10 @@ INT=15; TAG=""; GOT_INT=0; GOT_DUR=0; GOT_OUT=0
 case "${1:-}" in ''|-*) ;; *) INT="$1"; GOT_INT=1; shift;; esac
 case "${1:-}" in ''|-*) ;; *) TAG="$1"; shift;; esac
 OUTDIR=""; DURATION=0; NS="perf-kafka"; DEEP_EVERY=4; USE_CLI=1; THANOS=""; NOREPORT=0
+# Prometheus scrape interval. rate() needs >= 2 scrapes in its window, so this
+# sets the floor on the rate window. OpenShift cluster monitoring defaults to
+# 30s; override with SCRAPE_S=<seconds> if your platform team changed it.
+SCRAPE_S="${SCRAPE_S:-30}"
 DUMP=0; DUMPPAT=""
 MAXDUR=86400
 while [ $# -gt 0 ]; do
@@ -894,7 +898,27 @@ while :; do
     finish
   fi
   i=$((i+1)); SAMPLES=$i
-  W="${INT}s"; [ "$INT" -lt 60 ] && W="2m"   # rate() needs >= 2 scrapes
+
+  # ---------- rate() window ----------
+  # This used to be: W="${INT}s"; [ "$INT" -lt 60 ] && W="2m"
+  # With the recommended -i 10 that silently became a FIXED 2-MINUTE trailing
+  # average, refreshed every ~40s. During a ramp it lagged the real rate badly
+  # and integrating it over a window missed the broker's own count by ~10%.
+  #
+  # rate() needs at least two scrapes inside the window, so the floor is twice
+  # the Prometheus scrape interval. We cannot shrink below that -- but we can
+  # stop being 3x larger than necessary. Use twice the MEASURED cycle gap
+  # (which is what the samples are actually spaced by), floored at the scrape
+  # interval x2 and at 60s, and capped so a slow cycle cannot blow it up.
+  GAP=$(( NOW - ${PREV_NOW:-$NOW} ))
+  [ "$GAP" -lt 1 ] && GAP="$INT"
+  WSEC=$(( GAP * 2 ))
+  _FLOOR=$(( ${SCRAPE_S:-30} * 2 ))
+  [ "$_FLOOR" -lt 60 ] && _FLOOR=60
+  [ "$WSEC" -lt "$_FLOOR" ] && WSEC="$_FLOOR"
+  [ "$WSEC" -gt 600 ] && WSEC=600
+  W="${WSEC}s"
+  PREV_NOW="$NOW"
 
   # ---------- Thanos: broker throughput + saturation ----------
   : > "$TMP/brk"
@@ -1064,6 +1088,49 @@ $(sed -n '1,14p' "$TMP/render_err" | sed 's/^/      /')
   MAX_URP=$(keep_max  "$MAX_URP"  "$CUR_URP")
   MIN_IDLE=$(keep_min "$MIN_IDLE" "$CUR_IDLE")
 
+  # ---------- END OFFSETS: every cycle ----------
+  # These are the only exact numbers in the whole capture -- counts the broker
+  # maintains itself, not a sampled rate. They used to be taken only on the
+  # deep cycle, which made produced/s refresh once every DEEP_EVERY samples
+  # (~3 min at -i 10) while the inaccurate JMX rate updated every cycle. One
+  # extra `oc exec` per cycle buys an exact produced figure at full cadence.
+  if [ "$CLI_OK" -eq 1 ]; then
+    : > "$TMP/off"
+    oc -n "$NS" exec "$BPOD" -c kafka -- sh -c \
+      "$KBIN/kafka-get-offsets.sh --bootstrap-server $BOOTSTRAP --time latest 2>/dev/null" \
+      > "$TMP/off" 2>/dev/null || : > "$TMP/off"
+    if [ -s "$TMP/off" ]; then
+      awk -F: -v ts="$TS" -v el="$EL" 'NF>=3 && $3 ~ /^[0-9]+$/ {printf "%s,%s,%s,%s,%s\n", ts, el, $1, $2, $3}' \
+        "$TMP/off" >> "$C_OFF"
+    fi
+  fi
+
+  # ---------- produced/s and consumed/s, from the broker's own offsets ------
+  # Computed here in awk rather than inside the renderer: a dump file that
+  # fails to appear costs a dash on screen, where an exception inside
+  # kafka_sample.py costs the entire display. Same channel every other
+  # metric uses. Emits nothing until two deep samples exist, so the first
+  # cycle shows a dash and never a fabricated zero.
+  #   C_OFF: ts,elapsed_s,topic,partition,end_offset       -> $3 topic $5 value
+  #   C_LAG: ts,elapsed_s,group,topic,...,current_offset   -> $4 topic $8 value
+  _RATE_AWK='
+    BEGIN{FS=","}
+    NR==1{next}
+    $2 ~ /^[0-9.]+$/ && $(VC) ~ /^[0-9]+$/ {
+      e=$2+0; t=$(TC); if (t=="" || t=="topic") next
+      s[t SUBSEP e]+=$(VC); els[e]=1; tops[t]=1 }
+    END{
+      m1=-1; m2=-1
+      for (e in els) { v=e+0
+        if (v>m1) { m2=m1; m1=v } else if (v>m2) { m2=v } }
+      if (m2<0) exit
+      dt=m1-m2; if (dt<=0) exit
+      for (t in tops) { a=s[t SUBSEP m1]; b=s[t SUBSEP m2]
+        if (a=="" || b=="") continue
+        d=a-b; if (d>=0) printf "%s\t%.4f\n", t, d/dt } }'
+  awk -v TC=3 -v VC=5 "$_RATE_AWK" "$C_OFF" > "$TMP/prod_s" 2>/dev/null || : > "$TMP/prod_s"
+  awk -v TC=4 -v VC=8 "$_RATE_AWK" "$C_LAG" > "$TMP/cons_s" 2>/dev/null || : > "$TMP/cons_s"
+
   # ---------- expensive CLI captures, every Nth cycle ----------
   LAGLINE=""
   if [ "$CLI_OK" -eq 1 ] && [ $(( (i - 1) % DEEP_EVERY )) -eq 0 ]; then
@@ -1086,50 +1153,17 @@ $(sed -n '1,14p' "$TMP/render_err" | sed 's/^/      /')
       END { for (k in agg) { split(k,a,SUBSEP)
               printf "%s,%s,%s,%s,%d,,%d,%d,%d\n", ts, el, a[1], a[2], agg[k], mem[k], cur[k], leo[k] } }
     ' "$TMP/cg" >> "$C_LAG"
-    # Keep the END OFFSETS. A JMX rate is a derived number; an end offset is a
-    # count the broker itself maintains, so the two together verify each other.
-    # kafka-get-offsets covers every topic; the consumer-group output only
-    # covers topics that have a group, so it is the fallback.
-    : > "$TMP/off"
-    oc -n "$NS" exec "$BPOD" -c kafka -- sh -c \
-      "$KBIN/kafka-get-offsets.sh --bootstrap-server $BOOTSTRAP --time latest 2>/dev/null" \
-      > "$TMP/off" 2>/dev/null || : > "$TMP/off"
-    if [ -s "$TMP/off" ]; then
-      # topic:partition:offset
-      awk -F: -v ts="$TS" -v el="$EL" 'NF>=3 && $3 ~ /^[0-9]+$/ {printf "%s,%s,%s,%s,%s\n", ts, el, $1, $2, $3}' \
-        "$TMP/off" >> "$C_OFF"
-    else
+    # Fallback for end offsets only if kafka-get-offsets produced nothing this
+    # cycle (the every-cycle block above is the primary path). The
+    # consumer-group output covers only topics that have a group, so it is a
+    # partial substitute, never the preferred one.
+    if ! [ -s "$TMP/off" ]; then
       awk -v ts="$TS" -v el="$EL" '
         $1=="GROUP" || NF<6 { next }
         { k=$2 SUBSEP $3; if ($5+0 > seen[k]) seen[k]=$5+0 }
         END { for (k in seen) { split(k,a,SUBSEP); printf "%s,%s,%s,%s,%d\n", ts, el, a[1], a[2], seen[k] } }
       ' "$TMP/cg" >> "$C_OFF"
     fi
-    # ---------- produced/s and consumed/s, from the broker's own offsets ------
-    # Computed here in awk rather than inside the renderer: a dump file that
-    # fails to appear costs a dash on screen, where an exception inside
-    # kafka_sample.py costs the entire display. Same channel every other
-    # metric uses. Emits nothing until two deep samples exist, so the first
-    # cycle shows a dash and never a fabricated zero.
-    #   C_OFF: ts,elapsed_s,topic,partition,end_offset       -> $3 topic $5 value
-    #   C_LAG: ts,elapsed_s,group,topic,...,current_offset   -> $4 topic $8 value
-    _RATE_AWK='
-      BEGIN{FS=","}
-      NR==1{next}
-      $2 ~ /^[0-9.]+$/ && $(VC) ~ /^[0-9]+$/ {
-        e=$2+0; t=$(TC); if (t=="" || t=="topic") next
-        s[t SUBSEP e]+=$(VC); els[e]=1; tops[t]=1 }
-      END{
-        m1=-1; m2=-1
-        for (e in els) { v=e+0
-          if (v>m1) { m2=m1; m1=v } else if (v>m2) { m2=v } }
-        if (m2<0) exit
-        dt=m1-m2; if (dt<=0) exit
-        for (t in tops) { a=s[t SUBSEP m1]; b=s[t SUBSEP m2]
-          if (a=="" || b=="") continue
-          d=a-b; if (d>=0) printf "%s\t%.4f\n", t, d/dt } }'
-    awk -v TC=3 -v VC=5 "$_RATE_AWK" "$C_OFF" > "$TMP/prod_s" 2>/dev/null || : > "$TMP/prod_s"
-    awk -v TC=4 -v VC=8 "$_RATE_AWK" "$C_LAG" > "$TMP/cons_s" 2>/dev/null || : > "$TMP/cons_s"
 
     TOTLAG=$(awk -F, -v t="$TS" '$1==t{s+=$5} END{print s+0}' "$C_LAG")
     awk -v m="$MAX_LAG" -v n="$TOTLAG" 'BEGIN{exit !(n>m)}' && MAX_LAG="$TOTLAG"

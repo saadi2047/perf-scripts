@@ -340,8 +340,12 @@ rate_expr() {
   _sel="namespace=\"$NS\""
   [ -n "${3:-}" ] && _sel="$_sel,$3"
   case "$1" in
-    *_total|*_count) echo "rate($1{$_sel}[${2}])" ;;
-    *)               echo "$1{$_sel}" ;;
+    # _sum belongs here too. A histogram/summary _sum is a CUMULATIVE total,
+    # so leaving it out returned the raw lifetime figure: GC time came back as
+    # 17,673 ms/s -- 17.6 seconds of GC per second -- and sat frozen, because
+    # it was the since-start total, not a rate.
+    *_total|*_count|*_sum) echo "rate($1{$_sel}[${2}])" ;;
+    *)                     echo "$1{$_sel}" ;;
   esac
 }
 

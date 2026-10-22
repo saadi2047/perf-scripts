@@ -144,6 +144,25 @@ t_in, t_out, t_msg = rd("t_in"), rd("t_out"), rd("t_msg")
 # a missing or empty dump just means rd() returns {} and the columns show a
 # dash. Both are empty until two deep samples exist.
 prod_s, cons_s = rd("prod_s"), rd("cons_s")
+
+
+def rd_raw(name):
+    """read 'key<TAB>string' lines; never raises, returns {} on any problem"""
+    out = {}
+    try:
+        with open(os.path.join(TMP, name)) as f:
+            for line in f:
+                p = line.rstrip("\n").split("\t")
+                if len(p) >= 2 and p[0].strip():
+                    out[p[0].strip()] = p[1]
+    except Exception:
+        return {}
+    return out
+
+
+# Node CPU / memory with capacity and allocatable, pre-formatted by awk in
+# perf-kafka.sh as  cpuUsed|cpuAlloc|cpuCap|cpu%|memUsedGi|memAllocGi|memCapGi|mem%
+nodes_disp = rd_raw("n_disp")
 # Per-topic request outcomes. The broker publishes TOTAL and FAILED separately,
 # so success is the difference — never negative, and blank when the series is
 # absent rather than a misleading zero.
@@ -523,6 +542,39 @@ if pvcu:
                 owner = b
                 break
         csv_append(E("C_DSK"), [TS, EL, owner, v, f"{u:.2f}", f"{c:.2f}", f"{pct:.1f}"])
+
+    # storage totals across all Kafka PVCs, so the window has one disk figure
+    _tu = sum(pvcu.values()) / 1e9
+    _tc = sum(pvcc.get(k, 0) for k in pvcu) / 1e9
+    A(f"  {'TOTAL (' + str(len(pvcu)) + ' PVCs)':<44}{_tu:10.1f}{_tc:10.1f}"
+      f"{(_tu / _tc * 100) if _tc else 0:8.1f}%")
+
+# ---- 7. node CPU / memory, with capacity and allocatable -------------------
+# The pod table above shows what Kafka consumes; this shows what the NODE has
+# left. Values are pre-formatted by awk in perf-kafka.sh, so nothing is
+# computed here. cpu%/mem% are measured use against ALLOCATABLE (what the
+# scheduler can hand out), not raw capacity.
+if nodes_disp:
+    A("")
+    A("  [7] KAFKA NODES — CPU / MEMORY vs ALLOCATABLE")
+    A("  ----------------------------------------------------------------------------------")
+    A(f"  {'NODE':<30}{'cpu used':>10}{'cpu alloc':>11}{'cpu cap':>9}{'cpu%':>8}"
+      f"{'mem GiB':>9}{'alloc':>8}{'cap':>8}{'mem%':>8}")
+    for n in sorted(nodes_disp):
+        f_ = nodes_disp[n].split("|")
+        if len(f_) < 8:
+            continue
+        A(f"  {squeeze(n,29):<30}{f_[0]:>10}{f_[1]:>11}{f_[2]:>9}{f_[3]:>8}"
+          f"{f_[4]:>9}{f_[5]:>8}{f_[6]:>8}{f_[7]:>8}")
+    A("      cpu%/mem% are against ALLOCATABLE. Over ~85% on either means the")
+    A("      node, not Kafka, is the limit and the throughput figures above")
+    A("      describe a constrained host rather than your cluster.")
+elif E("C_NODE"):
+    A("")
+    A("  [7] KAFKA NODES — CPU / MEMORY vs ALLOCATABLE")
+    A("  ----------------------------------------------------------------------------------")
+    A("      No node data this sample. Needs `oc adm top node` (metrics-server)")
+    A("      and read access to node objects. Check: oc adm top node")
 
 print("\n".join(O))
 # values the shell keeps for the closing summary

@@ -550,8 +550,18 @@ M_REQRATE=$(find_metric 'requestmetrics.*requestspersec|requests_per_sec' counte
 M_FETCHLAG=$(find_metric 'fetcherlag|consumer_lag|replica.*lag' gauge)
 M_LOGSIZE=$(find_metric 'log_size|logsize' gauge)
 M_HEAP=$(find_metric '^jvm_memory_bytes_used$|^jvm_memory_used_bytes$' gauge)
-M_GCCOUNT=$(find_metric '^jvm_gc_[a-z_]*_seconds_count$' counter)
-M_GCTIME=$(find_metric '^jvm_gc_[a-z_]*_seconds_sum$' counter)
+# exporter_names() reads `# TYPE <name> ...` lines, and for a histogram or
+# summary that line carries only the BASE name -- the _count and _sum series
+# are never in the discovered list. Searching for '_count$' therefore never
+# matched and GC has been silently absent while heap (a plain gauge) worked.
+# Match the base name too, then append the suffix.
+M_GCBASE=$(find_metric '^jvm_gc_[a-z_]*_seconds(_count)?$' counter)
+case "${M_GCBASE:-}" in
+  "")              M_GCCOUNT=""; M_GCTIME="" ;;
+  *_seconds_count) M_GCCOUNT="$M_GCBASE"; M_GCTIME="${M_GCBASE%_count}_sum" ;;
+  *_seconds)       M_GCCOUNT="${M_GCBASE}_count"; M_GCTIME="${M_GCBASE}_sum" ;;
+  *)               M_GCCOUNT="$M_GCBASE"; M_GCTIME="$M_GCBASE" ;;
+esac
 M_CGLAG=$(find_metric '^kafka_consumergroup_lag$|consumergroup_lag' gauge)
 # PVC usage comes from the kubelet, not from Kafka. The name catalogue is built
 # mostly from the broker's own JMX exporter, which obviously never publishes a
@@ -738,6 +748,8 @@ C_DSK="$OUTDIR/kafka_disk_${TAG}.csv"
 C_LAG="$OUTDIR/kafka_lag_${TAG}.csv"
 C_HLT="$OUTDIR/kafka_health_${TAG}.csv"
 C_OFF="$OUTDIR/kafka_offsets_${TAG}.csv"
+C_NODE="$OUTDIR/kafka_node_${TAG}.csv"
+TMPDIR_CAP="$TMP/nodecap"
 
 echo "ts_ist,elapsed_s,active_controllers,offline_partitions,under_replicated,unclean_elections,partitions_total,leaders_total,bytes_in_mb_s,bytes_out_mb_s,messages_in_s" > "$C_CLU"
 echo "ts_ist,elapsed_s,pod,bytes_in_mb_s,bytes_out_mb_s,messages_in_s,handler_idle_pct,network_idle_pct,request_queue,response_queue,purgatory,under_replicated,partitions,leaders,isr_shrink_s,isr_expand_s,follower_lag,at_min_isr,purgatory_produce" > "$C_BRK"
@@ -748,7 +760,31 @@ echo "ts_ist,elapsed_s,pod,role,node,phase,ready,restarts,cpu_m,mem_mi" > "$C_PO
 echo "ts_ist,elapsed_s,pod,pvc,used_gb,capacity_gb,used_pct" > "$C_DSK"
 echo "ts_ist,elapsed_s,group,topic,lag,state,members,current_offset,log_end_offset" > "$C_LAG"
 echo "ts_ist,elapsed_s,check,value,detail" > "$C_HLT"
+# ---------- node capacity / allocatable: static, resolved once --------------
+# `oc get node` capacity does not change during a window, so fetching it per
+# cycle would be pure overhead. Only the live usage (`oc adm top node`) is
+# sampled. Written as node<TAB>cpuCapM<TAB>cpuAllocM<TAB>memCapMi<TAB>memAllocMi
+: > "$TMPDIR_CAP"
+KNODES=$(oc -n "$NS" get pods --no-headers \
+           -o custom-columns='P:.metadata.name,N:.spec.nodeName,S:.status.phase' 2>/dev/null \
+         | awk '$1 ~ /-(broker|controller)-[0-9]+$/ && $3=="Running" {print $2}' | sort -u)
+for _n in ${KNODES:-}; do
+  [ -z "$_n" ] && continue
+  oc get node "$_n" -o jsonpath='{.status.capacity.cpu}{"\t"}{.status.allocatable.cpu}{"\t"}{.status.capacity.memory}{"\t"}{.status.allocatable.memory}{"\n"}' 2>/dev/null \
+  | awk -v n="$_n" -F'\t' '
+      function cpu2m(v){ if (v ~ /m$/){sub(/m$/,"",v); return v+0} return (v+0)*1000 }
+      function mem2mi(v){
+        if (v ~ /Ki$/){sub(/Ki$/,"",v); return (v+0)/1024}
+        if (v ~ /Mi$/){sub(/Mi$/,"",v); return v+0}
+        if (v ~ /Gi$/){sub(/Gi$/,"",v); return (v+0)*1024}
+        if (v ~ /Ti$/){sub(/Ti$/,"",v); return (v+0)*1048576}
+        return (v+0)/1048576 }
+      NF>=4 { printf "%s\t%d\t%d\t%.0f\t%.0f\n", n, cpu2m($1), cpu2m($2), mem2mi($3), mem2mi($4) }' \
+  >> "$TMPDIR_CAP"
+done
+
 echo "ts_ist,elapsed_s,topic,partition,end_offset" > "$C_OFF"
+echo "ts_ist,elapsed_s,node,cpu_used_m,cpu_alloc_m,cpu_cap_m,cpu_pct,mem_used_mi,mem_alloc_mi,mem_cap_mi,mem_pct,pvc_used_gb,pvc_cap_gb,pvc_pct" > "$C_NODE"
 
 role_of() {
   printf '%s\n' "$BROKERS"     | grep -qx "$1" && { echo broker; return; }
@@ -887,7 +923,10 @@ echo
 
 i=0
 while :; do
-  sleep "$INT"
+  # The first sample used to wait a full INT before doing any work, on top of
+  # the ~50s the collection itself takes, so nothing appeared on screen for
+  # over a minute. Collect sample 1 immediately; sleep only between samples.
+  [ "${i:-0}" -gt 0 ] && sleep "$INT"
   NOW=$(date +%s)
   if [ "$DEADLINE" -gt 0 ] && [ "$NOW" -ge "$DEADLINE" ]; then
     # The last sample is allowed to finish; a collection cannot be aborted
@@ -919,6 +958,19 @@ while :; do
   [ "$WSEC" -gt 600 ] && WSEC=600
   W="${WSEC}s"
   PREV_NOW="$NOW"
+
+  # ---------- END OFFSETS: every cycle, kicked off in the BACKGROUND -------
+  # Serialising this exec added ~20s to every cycle (43s -> 64s observed).
+  # Start it here, read it at the end of the cycle, so it overlaps the Thanos
+  # queries rather than adding to them.
+  OFFPID=""
+  if [ "$CLI_OK" -eq 1 ]; then
+    : > "$TMP/off.new"
+    ( oc -n "$NS" exec "$BPOD" -c kafka -- sh -c \
+        "$KBIN/kafka-get-offsets.sh --bootstrap-server $BOOTSTRAP --time latest 2>/dev/null" \
+        > "$TMP/off.new" 2>/dev/null ) &
+    OFFPID=$!
+  fi
 
   # ---------- Thanos: broker throughput + saturation ----------
   : > "$TMP/brk"
@@ -1054,6 +1106,77 @@ while :; do
   READ_MS=$(now_ms); EL=$(( (READ_MS - T0_MS + 500) / 1000 ))
   TS=$(TZ=Asia/Kolkata date '+%Y-%m-%d %H:%M:%S')
 
+  # ---------- END OFFSETS: collect the background job ----------
+  # These are the only exact numbers in the whole capture -- counts the broker
+  # maintains itself, not a sampled rate. Taken every cycle so produced/s
+  # tracks at full cadence instead of refreshing once per DEEP_EVERY samples.
+  : > "$TMP/off"
+  if [ -n "${OFFPID:-}" ]; then
+    wait "$OFFPID" 2>/dev/null || :
+    [ -s "$TMP/off.new" ] && cp "$TMP/off.new" "$TMP/off" 2>/dev/null || :
+    if [ -s "$TMP/off" ]; then
+      awk -F: -v ts="$TS" -v el="$EL" 'NF>=3 && $3 ~ /^[0-9]+$/ {printf "%s,%s,%s,%s,%s\n", ts, el, $1, $2, $3}' \
+        "$TMP/off" >> "$C_OFF"
+    fi
+  fi
+
+  # ---------- produced/s and consumed/s, from the broker's own offsets ------
+  # Computed here in awk rather than inside the renderer: a dump file that
+  # fails to appear costs a dash on screen, where an exception inside
+  # kafka_sample.py costs the entire display. Same channel every other
+  # metric uses. Emits nothing until two deep samples exist, so the first
+  # cycle shows a dash and never a fabricated zero.
+  #   C_OFF: ts,elapsed_s,topic,partition,end_offset       -> $3 topic $5 value
+  #   C_LAG: ts,elapsed_s,group,topic,...,current_offset   -> $4 topic $8 value
+  _RATE_AWK='
+    BEGIN{FS=","}
+    NR==1{next}
+    $2 ~ /^[0-9.]+$/ && $(VC) ~ /^[0-9]+$/ {
+      e=$2+0; t=$(TC); if (t=="" || t=="topic") next
+      s[t SUBSEP e]+=$(VC); els[e]=1; tops[t]=1 }
+    END{
+      m1=-1; m2=-1
+      for (e in els) { v=e+0
+        if (v>m1) { m2=m1; m1=v } else if (v>m2) { m2=v } }
+      if (m2<0) exit
+      dt=m1-m2; if (dt<=0) exit
+      for (t in tops) { a=s[t SUBSEP m1]; b=s[t SUBSEP m2]
+        if (a=="" || b=="") continue
+        d=a-b; if (d>=0) printf "%s\t%.4f\n", t, d/dt } }'
+  awk -v TC=3 -v VC=5 "$_RATE_AWK" "$C_OFF" > "$TMP/prod_s" 2>/dev/null || : > "$TMP/prod_s"
+  awk -v TC=4 -v VC=8 "$_RATE_AWK" "$C_LAG" > "$TMP/cons_s" 2>/dev/null || : > "$TMP/cons_s"
+
+  # ---------- NODE utilisation: one `oc adm top node` for all nodes --------
+  # Capacity/allocatable came from $TMPDIR_CAP once at startup; only usage is
+  # sampled. No pod exec, so this is cheap. Emits node<TAB>cpu%<TAB>mem% for
+  # the display plus a full row per node to the CSV.
+  : > "$TMP/n_cpu"; : > "$TMP/n_mem"; : > "$TMP/n_disp"
+  if [ -s "$TMPDIR_CAP" ]; then
+    oc adm top node --no-headers > "$TMP/topnode" 2>/dev/null || : > "$TMP/topnode"
+    awk -v ts="$TS" -v el="$EL" -v csv="$C_NODE" -v fcpu="$TMP/n_cpu" -v fmem="$TMP/n_mem" -v fdisp="$TMP/n_disp" '
+      function cpu2m(v){ if (v ~ /m$/){sub(/m$/,"",v); return v+0} return (v+0)*1000 }
+      function mem2mi(v){
+        if (v ~ /Ki$/){sub(/Ki$/,"",v); return (v+0)/1024}
+        if (v ~ /Mi$/){sub(/Mi$/,"",v); return v+0}
+        if (v ~ /Gi$/){sub(/Gi$/,"",v); return (v+0)*1024}
+        return (v+0)/1048576 }
+      NR==FNR { cc[$1]=$2; ca[$1]=$3; mc[$1]=$4; ma[$1]=$5; next }
+      # oc adm top node: NAME cpu cpu% mem mem%
+      ($1 in ca) {
+        cu=cpu2m($2); mu=mem2mi($4)
+        cp = (ca[$1]>0) ? cu/ca[$1]*100 : -1
+        mp = (ma[$1]>0) ? mu/ma[$1]*100 : -1
+        printf "%s\t%.1f\n", $1, cp >> fcpu
+        printf "%s\t%.1f\n", $1, mp >> fmem
+        # pre-formatted for the display: the renderer prints this verbatim and
+        # does no arithmetic, so it cannot throw on it.
+        printf "%s\t%dm|%dm|%dm|%.1f%%|%.1f|%.1f|%.1f|%.1f%%\n", $1,
+               cu, ca[$1], cc[$1], cp, mu/1024, ma[$1]/1024, mc[$1]/1024, mp >> fdisp
+        printf "%s,%s,%s,%d,%d,%d,%.1f,%.0f,%.0f,%.0f,%.1f,,,\n",
+               ts, el, $1, cu, ca[$1], cc[$1], cp, mu, ma[$1], mc[$1], mp >> csv
+      }' "$TMPDIR_CAP" "$TMP/topnode" 2>/dev/null || :
+  fi
+
   # ---------- render + write ----------
   OUT=$(TS="$TS" EL="$EL" TMPD="$TMP" NS="$NS" HAVE="$HAVE" LAT_KIND="$LAT_KIND" \
         BROKERS="$BROKERS" CONTROLLERS="$CONTROLLERS" \
@@ -1088,48 +1211,6 @@ $(sed -n '1,14p' "$TMP/render_err" | sed 's/^/      /')
   MAX_URP=$(keep_max  "$MAX_URP"  "$CUR_URP")
   MIN_IDLE=$(keep_min "$MIN_IDLE" "$CUR_IDLE")
 
-  # ---------- END OFFSETS: every cycle ----------
-  # These are the only exact numbers in the whole capture -- counts the broker
-  # maintains itself, not a sampled rate. They used to be taken only on the
-  # deep cycle, which made produced/s refresh once every DEEP_EVERY samples
-  # (~3 min at -i 10) while the inaccurate JMX rate updated every cycle. One
-  # extra `oc exec` per cycle buys an exact produced figure at full cadence.
-  if [ "$CLI_OK" -eq 1 ]; then
-    : > "$TMP/off"
-    oc -n "$NS" exec "$BPOD" -c kafka -- sh -c \
-      "$KBIN/kafka-get-offsets.sh --bootstrap-server $BOOTSTRAP --time latest 2>/dev/null" \
-      > "$TMP/off" 2>/dev/null || : > "$TMP/off"
-    if [ -s "$TMP/off" ]; then
-      awk -F: -v ts="$TS" -v el="$EL" 'NF>=3 && $3 ~ /^[0-9]+$/ {printf "%s,%s,%s,%s,%s\n", ts, el, $1, $2, $3}' \
-        "$TMP/off" >> "$C_OFF"
-    fi
-  fi
-
-  # ---------- produced/s and consumed/s, from the broker's own offsets ------
-  # Computed here in awk rather than inside the renderer: a dump file that
-  # fails to appear costs a dash on screen, where an exception inside
-  # kafka_sample.py costs the entire display. Same channel every other
-  # metric uses. Emits nothing until two deep samples exist, so the first
-  # cycle shows a dash and never a fabricated zero.
-  #   C_OFF: ts,elapsed_s,topic,partition,end_offset       -> $3 topic $5 value
-  #   C_LAG: ts,elapsed_s,group,topic,...,current_offset   -> $4 topic $8 value
-  _RATE_AWK='
-    BEGIN{FS=","}
-    NR==1{next}
-    $2 ~ /^[0-9.]+$/ && $(VC) ~ /^[0-9]+$/ {
-      e=$2+0; t=$(TC); if (t=="" || t=="topic") next
-      s[t SUBSEP e]+=$(VC); els[e]=1; tops[t]=1 }
-    END{
-      m1=-1; m2=-1
-      for (e in els) { v=e+0
-        if (v>m1) { m2=m1; m1=v } else if (v>m2) { m2=v } }
-      if (m2<0) exit
-      dt=m1-m2; if (dt<=0) exit
-      for (t in tops) { a=s[t SUBSEP m1]; b=s[t SUBSEP m2]
-        if (a=="" || b=="") continue
-        d=a-b; if (d>=0) printf "%s\t%.4f\n", t, d/dt } }'
-  awk -v TC=3 -v VC=5 "$_RATE_AWK" "$C_OFF" > "$TMP/prod_s" 2>/dev/null || : > "$TMP/prod_s"
-  awk -v TC=4 -v VC=8 "$_RATE_AWK" "$C_LAG" > "$TMP/cons_s" 2>/dev/null || : > "$TMP/cons_s"
 
   # ---------- expensive CLI captures, every Nth cycle ----------
   LAGLINE=""

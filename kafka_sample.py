@@ -434,10 +434,14 @@ if t_in:
     _keys = sorted(set(t_in) | set(prod_s) | set(cons_s),
                    key=lambda k: -max(prod_s.get(k, 0.0), t_msg.get(k, 0.0)))
     for t in _keys[:12]:
-        _p = f"{prod_s[t]:9.1f}" if t in prod_s else f"{'—':>9}"
-        _c = f"{cons_s[t]:9.1f}" if t in cons_s else f"{'—':>9}"
+        # NOT _p / _c: this loop runs at module scope, and `_c` is the
+        # formatting helper defined at the top of this file. Rebinding it here
+        # turned it into a str and the pods section then died on `_c(hp, 9)`
+        # with "'str' object is not callable".
+        _prate = f"{prod_s[t]:9.1f}" if t in prod_s else f"{'—':>9}"
+        _crate = f"{cons_s[t]:9.1f}" if t in cons_s else f"{'—':>9}"
         A(f"  {squeeze(t,37):<38}{t_in.get(t,0)/MB:9.3f}{t_out.get(t,0)/MB:9.3f}"
-          f"{t_msg.get(t,0):9.0f}{_p}{_c}")
+          f"{t_msg.get(t,0):9.0f}{_prate}{_crate}")
     if prod_s or cons_s:
         A("      PROD/s and CONS/s are EXACT: differenced from the broker's own end")
         A("      offsets and committed offsets. PROD/s updates every cycle, CONS/s")
